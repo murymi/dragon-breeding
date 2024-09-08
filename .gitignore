@@ -1,0 +1,4 @@
+.zig-cache
+*.iso
+zig-out
+**.o
