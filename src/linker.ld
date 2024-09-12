@@ -1,10 +1,12 @@
 ENTRY(_start)
 
+
 KERNEL_ADDR_OFFSET = 0xC0000000;
- 
+KERNEL_VADDR_START = 0xC0100000;
 SECTIONS {
     . = 1M;
     _kernel_start = .;
+    KERNEL_PHYSADDR_START = .;
 
     .rodata.multiboot : {
 		*(.rodata.multiboot.magic)
@@ -46,5 +48,8 @@ SECTIONS {
 	}
 
     _kernel_end = .;
+
+    KERNEL_VADDR_END = .;
+	KERNEL_PHYSADDR_END = . - KERNEL_ADDR_OFFSET;
 }
 

@@ -135,11 +135,11 @@ pub const struct_multiboot_color = extern struct {
     green: multiboot_uint8_t,
     blue: multiboot_uint8_t,
 };
-pub const struct_multiboot_mmap_entry = packed struct {
-    size: multiboot_uint32_t,
-    addr: multiboot_uint64_t,
-    len: multiboot_uint64_t,
-    type: multiboot_uint32_t,
+pub const struct_multiboot_mmap_entry = extern struct {
+    size: multiboot_uint32_t align(1),
+    addr: multiboot_uint64_t align(1),
+    len: multiboot_uint64_t align(1),
+    type: multiboot_uint32_t align(1),
 };
 pub const multiboot_memory_map_t = struct_multiboot_mmap_entry;
 pub const struct_multiboot_mod_list = extern struct {

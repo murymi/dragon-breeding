@@ -83,6 +83,8 @@ pub fn clearScreen(color: ConsoleColor) void {
             col.* = VgaCell.init(' ', .white, color);
         }
     }
+
+    setCursor(.{.x =0, .y = 0});
 }
 
 pub fn scrollUp(bg: ConsoleColor) void {

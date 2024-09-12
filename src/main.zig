@@ -4,6 +4,9 @@ const vga = @import("vga.zig");
 const interrupts = @import("interrupts.zig");
 const gdt = @import("gdt.zig");
 const multiboot = @import("multiboot.zig");
+const paging = @import("paging.zig");
+const pmm = @import("pmm.zig");
+const vmm = @import("vmm.zig");
 
 pub fn panic(message: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     vga.print("Panic: {s}\n", .{message});
@@ -15,19 +18,43 @@ pub fn panic(message: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noretu
 
 export fn kmain(ptr: usize)  noreturn {
     //gdt.init();
-    //interrupts.initIdt();
 
-    //vga.clearScreen(.nightBlue);
 
     const mptr =@as(*multiboot.multiboot_info_t, @ptrFromInt(ptr));
 
 
-    vga.print("Halt cpu: {}\n", .{mptr.*});
+    //vga.print("Halt cpu: {}\n", .{mptr.*});
+    //interrupts.clearMask(0x1);
+
+    var mem_profile = paging.initMem(mptr) catch {
+        vga.print("failed to init mem profile\n", .{});
+        @panic("=====\n");
+    };
+    //_ = mem_profile;
+    const allocator = mem_profile.fixed_allocator.allocator();
+
+    pmm.init(&mem_profile, allocator);
+
+    const kern_vmm = vmm.init(&mem_profile, allocator) catch unreachable;
+    _= kern_vmm;
+    gdt.init();
+    interrupts.initIdt();
+
+    paging.init(&mem_profile);
+    vga.clearScreen(.nightBlue);
+    interrupts.clearMask(0x1);
+
+    //kern_vmm.alloc(num: usize, virtual_addr: ?usize, attrs: Attributes)
+
+    //const a: *u8 = @ptrFromInt(0xdeadbaba);
+    //vga.print("{any}\n", .{);
+    //a.* = 'c';
+
 
     //asm volatile("cli");
 
     while (true) {
-        asm volatile("cli");
+        //asm volatile("cli");
         asm volatile("hlt");
     }
 }
