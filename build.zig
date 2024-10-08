@@ -1,7 +1,8 @@
 const std = @import("std");
 const Builder = @import("std").Build;
 const Target = @import("std").Target;
-const CrossTarget = @import("std").zig.CrossTarget;
+const CrossTarget = Target.Query;
+//zig.CrossTarget;
 const Feature = @import("std").Target.Cpu.Feature;
 
 pub fn build(b: *Builder) void {

@@ -1,55 +1,74 @@
 ENTRY(_start)
 
+__higher_half_start = 0xC0000000;
+__kernel_higher_half_position = 0xC0100000;
 
-KERNEL_ADDR_OFFSET = 0xC0000000;
-KERNEL_VADDR_START = 0xC0100000;
 SECTIONS {
+
     . = 1M;
-    _kernel_start = .;
-    KERNEL_PHYSADDR_START = .;
+
+    __kernel_start = .;
 
     .rodata.multiboot : {
 		*(.rodata.multiboot.magic)
 		*(.rodata.multiboot.flags)
 		*(.rodata.multiboot.checksum)
+        *(.multiboot.text.boot)
+        *(.multiboot.bss.boot)
+        *(.multiboot.bss.data)
+        *(.multiboot.rodata.boot)
 	}
+    
+    . += __higher_half_start;
 
-    .data.multiboot : {
-        *(.data.multiboot)
-    }
+    __kernel_higher_half_start = .;
 
-	.text.boot : {
-		*(.text.boot)
-	}
-
-    . += 0xc0000000;
-    .text ALIGN (4K) : AT (ADDR (.text) - 0xc0000000) {
+    .text ALIGN (4K)
+    : 
+    AT (ADDR(.text) - __higher_half_start)
+    {
+		__kernel_text_start = .;
         *(.text)
+		__kernel_text_stop = .;
     }
- 
-    .rodata ALIGN(4K) : AT (ADDR (.rodata) - 0xc0000000){
+
+
+    .rodata ALIGN(4K) : 
+    AT (ADDR(.rodata) - __higher_half_start)
+    {
+		__kernel_rodata_start = .;
         *(.rodata)
+		__kernel_rodata_stop = .;
     }
  
-    .data ALIGN(4K) : AT (ADDR (.data) - 0xc0000000) {
+    .data ALIGN(4K) : 
+    AT (ADDR(.data) - __higher_half_start)
+    {
+		__kernel_data_start = .;
         *(.data)
+		__kernel_data_stop = .;
     }
  
-    .bss ALIGN(4K) : AT (ADDR (.bss) - 0xc0000000) {
+    .bss ALIGN(4K) :
+    AT (ADDR(.bss) - __higher_half_start)
+     {
+		__kernel_bss_start = .;
         *(COMMON)
         *(.bss)
+		__kernel_bss_stop = .;
+
     }
 
-
-    .bss.stack ALIGN(4K) : AT (ADDR(.bss.stack) - 0xc0000000) {
-		KERNEL_STACK_START = .;
+    .bss.stack ALIGN(4K) : 
+    AT (ADDR(.bss.stack) - __higher_half_start)
+    {
+		__kernel_stack_start = .;
 		KEEP(*(.bss.stack))
-		KERNEL_STACK_END = .;
+		__kernel_stack_stop = .;
 	}
 
-    _kernel_end = .;
-
-    KERNEL_VADDR_END = .;
-	KERNEL_PHYSADDR_END = . - KERNEL_ADDR_OFFSET;
+    __kernel_higher_half_stop = .;
+    PROVIDE(doggy = .);
+    __kernel_stop = . - __higher_half_start;
 }
 

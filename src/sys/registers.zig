@@ -1,0 +1,2177 @@
+/// The system flags and IOPL field of the EFLAGS register control I/O, maskable hardware inter-
+/// rupts, debugging, task switching, and the virtual-8086 mode (see Figure 2-4). Only privileged
+/// code (typically operating system or executive code) should be allowed to modify these bits.
+pub const Eflags = packed struct(u32) {
+    cf: bool = false,
+    reserved1: bool = false,
+    pf: bool = false,
+    reserved2: bool = false,
+    af: bool = false,
+    reserved3: bool = false,
+    zf: bool = false,
+    sf: bool = false,
+    tf: bool = false,
+
+    /// Interrupt enable (bit 9) — Controls the response of the processor to maskable hard-
+    /// ware interrupt requests (see also: Section 5.3.2, “Maskable Hardware Interrupts”). The
+    /// flag is set to respond to maskable hardware interrupts; cleared to inhibit maskable hard-
+    /// ware interrupts. The IF flag does not affect the generation of exceptions or
+    /// nonmaskable interrupts (NMI interrupts). The CPL, IOPL, and the state of the VME
+    /// flag in control register CR4 determine whether the IF flag can be modified by the CLI,
+    /// STI, POPF, POPFD, and IRET.
+    interrupts_enable: bool = false,
+
+    df: bool = false,
+    of: bool = false,
+
+    /// I/O privilege level field (bits 12 and 13) — Indicates the I/O privilege level (IOPL)
+    /// of the currently running program or task. The CPL of the currently running program
+    /// or task must be less than or equal to the IOPL to access the I/O address space. This
+    /// field can only be modified by the POPF and IRET instructions when operating at a
+    /// CPL of 0.
+    io_previlege_level: u2 = 0,
+
+    /// Nested task (bit 14) — Controls the chaining of interrupted and called tasks. The
+    /// processor sets this flag on calls to a task initiated with a CALL instruction, an interrupt,
+    /// or an exception. It examines and modifies this flag on returns from a task initiated with
+    /// the IRET instruction. The flag can be explicitly set or cleared with the POPF/POPFD
+    /// instructions; however, changing to the state of this flag can generate unexpected excep-
+    /// tions in application programs.
+    /// See also: Section 6.4, “Task Linking”.
+    nested_task: bool = false,
+
+    reserved4: bool = false,
+
+    /// Resume (bit 16) — Controls the processor’s response to instruction-breakpoint condi
+    ///tions. When set, this flag temporarily disables debug exceptions (#DB) from being
+    /// generated for instruction breakpoints (although other exception conditions can
+    /// cause an exception to be generated). When clear, instruction breakpoints will
+    /// generate debug exceptions.
+    /// The primary function of the RF flag is to allow the restarting of an instruction following
+    /// a debug exception that was caused by an instruction breakpoint condition. Here, debug
+    /// software must set this flag in the EFLAGS image on the stack just prior to returning to
+    /// the interrupted program with IRETD (to prevent the instruction breakpoint from
+    /// causing another debug exception). The processor then automatically clears this flag
+    /// after the instruction returned to has been successfully executed, enabling instruction
+    /// breakpoint faults again.
+    /// See also: Section 15.3.1.1, “Instruction-Breakpoint Exception Condition”.
+    resumeflag: bool = false,
+
+    /// Virtual-8086 mode (bit 17) — Set to enable virtual-8086 mode; clear to return to
+    /// protected mode.
+    /// See also: Section 16.2.1, “Enabling Virtual-8086 Mode”.
+    vitual_8086_mode: bool = false,
+
+    /// Alignment check (bit 18) — Set this flag and the AM flag in control register CR0 to
+    /// enable alignment checking of memory references; clear the AC flag and/or the AM flag
+    /// to disable alignment checking. An alignment-check exception is generated when refer-
+    /// ence is made to an unaligned operand, such as a word at an odd byte address or a
+    /// doubleword at an address which is not an integral multiple of four. Alignment-check
+    /// exceptions are generated only in user mode (privilege level 3). Memory references that
+    /// default to privilege level 0, such as segment descriptor loads, do not generate this
+    /// exception even when caused by instructions executed in user-mode.
+    /// The alignment-check exception can be used to check alignment of data. This is useful
+    /// when exchanging data with processors which require all data to be aligned. The align-
+    /// ment-check exception can also be used by interpreters to flag some pointers as special
+    /// by misaligning the pointer. This eliminates overhead of checking each pointer and only
+    /// handles the special pointer when used.
+    alignment_check: bool = false,
+
+    /// Virtual Interrupt (bit 19) — Contains a virtual image of the IF flag. This flag is used
+    /// in conjunction with the VIP flag. The processor only recognizes the VIF flag when
+    /// either the VME flag or the PVI flag in control register CR4 is set and the IOPL is less
+    /// than 3. (The VME flag enables the virtual-8086 mode extensions; the PVI flag enables
+    /// the protected-mode virtual interrupts.)
+    /// See also: Section 16.3.3.5, “Method 6: Software Interrupt Handling” and Section 16.4,
+    /// “Protected-Mode Virtual Interrupts”.
+    vrtual_interrupt: bool = false,
+
+    /// Virtual interrupt pending (bit 20) — Set by software to indicate that an interrupt is
+    /// pending; cleared to indicate that no interrupt is pending. This flag is used in conjunction
+    /// with the VIF flag. The processor reads this flag but never modifies it. The processor
+    /// only recognizes the VIP flag when either the VME flag or the PVI flag in control
+    /// register CR4 is set and the IOPL is less than 3. The VME flag enables the virtual-8086
+    /// mode extensions; the PVI flag enables the protected-mode virtual interrupts.
+    /// See Section 16.3.3.5, “Method 6: Software Interrupt Handling” and Section 16.4,
+    /// “Protected-Mode Virtual Interrupts”.
+    virtual_interrupt_pending: bool = false,
+
+    /// Identification (bit 21). — The ability of a program or procedure to set or clear this flag
+    /// indicates support for the CPUID instruction.
+    identification: bool = false,
+
+    reserved5: u10 = 0,
+
+    pub const Self = @This();
+
+    /// read eflags register
+    pub inline fn read() Self {
+        const res = asm volatile (
+            \\ xor %%eax, %%eax
+            \\ pushfl
+            \\ pop %%eax
+            : [ret] "={eax}" (-> u32),
+        );
+
+        return @bitCast(res);
+    }
+
+    pub inline fn write(self: Self) void {
+        asm volatile (
+            \\ pushl %[a]
+            \\ popfl
+            :
+            : [a] "r" (self),
+        );
+    }
+};
+
+/// The GDT pointer structure that contains the pointer to the beginning of the GDT and the number
+/// of the table (minus 1). Used to load the GDT with LGDT instruction.
+///
+/// When the GDTR register is stored (using the SGDT instruction), a 48-bit “pseudo-descriptor”
+/// is stored in memory (see top diagram in Figure 3-11). To avoid alignment check faults in user
+/// mode (privilege level 3), the pseudo-descriptor should be located at an odd word address (that
+/// is, address MOD 4 is equal to 2). This causes the processor to store an aligned word, followed
+/// by an aligned doubleword. User-mode programs normally do not store pseudo-descriptors, but
+/// the possibility of generating an alignment check fault can be avoided by aligning pseudo-
+/// descriptors in this way. The same alignment should be used when storing the IDTR register
+/// using the SIDT instruction. When storing the LDTR or task register (using the SLTR or STR
+/// instruction, respectively), the pseudo-descriptor should be located at a doubleword address (that
+/// is, address MOD 4 is equal to 0).
+pub const PseudoDescriptor = packed struct {
+    /// 16bit entry for the number of entries (minus 1).
+    limit: u16,
+
+    /// 32bit entry for the base address for the GDT.
+    base: u32,
+};
+
+/// The GDTR register holds the base address (32 bits in protected mode; 64 bits in IA-32e mode)
+/// and the 16-bit table limit for the GDT. The base address specifies the linear address of byte 0 of
+/// the GDT; the table limit specifies the number of bytes in the table.
+/// The LGDT and SGDT instructions load and store the GDTR register, respectively. On power up
+/// or reset of the processor, the base address is set to the default value of 0 and the limit is set to
+/// 0FFFFH. A new base address must be loaded into the GDTR as part of the processor initializa-
+/// tion process for protected-mode operation.
+/// See also: Section 3.5.1, “Segment Descriptor Tables”.
+pub const Gdtr = packed struct {
+    pub inline fn read() PseudoDescriptor {
+        var res = PseudoDescriptor{ .limit = 0, .base = 0 };
+        asm volatile ("sgdt %[tab]"
+            : [tab] "=m" (res),
+        );
+        return res;
+    }
+
+    pub inline fn write(ptr: PseudoDescriptor) void {
+        asm volatile (
+            \\lgdt (%%eax)
+            :
+            : [ptr] "{eax}" (&ptr),
+        );
+    }
+};
+
+/// The LDTR register holds the 16-bit segment selector, base address (32 bits in protected mode;
+/// 64 bits in IA-32e mode), segment limit, and descriptor attributes for the LDT. The base address
+/// specifies the linear address of byte 0 of the LDT segment; the segment limit specifies the number
+/// of bytes in the segment. See also: Section 3.5.1, “Segment Descriptor Tables”.
+/// The LLDT and SLDT instructions load and store the segment selector part of the LDTR register,
+/// respectively. The segment that contains the LDT must have a segment descriptor in the GDT.
+/// When the LLDT instruction loads a segment selector in the LDTR: the base address, limit, and
+/// descriptor attributes from the LDT descriptor are automatically loaded in the LDTR.
+/// When a task switch occurs, the LDTR is automatically loaded with the segment selector and
+/// descriptor for the LDT for the new task. The contents of the LDTR are not automatically saved
+/// prior to writing the new LDT information into the register.
+/// On power up or reset of the processor, the segment selector and base address are set to the default
+/// value of 0 and the limit is set to 0FFFFH.
+pub const Ldtr = packed struct {
+    pub inline fn read() PseudoDescriptor {
+        var res = PseudoDescriptor{ .limit = 0, .base = 0 };
+        asm volatile ("sldt %[tab]"
+            : [tab] "=m" (res),
+        );
+        return res;
+    }
+
+    pub inline fn write(ptr: PseudoDescriptor) void {
+        asm volatile (
+            \\lldt (%%eax)
+            :
+            : [ptr] "{eax}" (&ptr),
+        );
+    }
+};
+
+/// The IDTR register holds the base address (32 bits in protected mode; 64 bits in IA-32e mode)
+/// and 16-bit table limit for the IDT. The base address specifies the linear address of byte 0 of the
+/// IDT; the table limit specifies the number of bytes in the table. The LIDT and SIDT instructions
+/// load and store the IDTR register, respectively. On power up or reset of the processor, the base
+/// address is set to the default value of 0 and the limit is set to 0FFFFH. The base address and limit
+/// in the register can then be changed as part of the processor initialization process.
+/// See also: Section 5.10, “Interrupt Descriptor Table (IDT)”.
+pub const Idtr = packed struct {
+    pub inline fn read() PseudoDescriptor {
+        var res = PseudoDescriptor{ .limit = 0, .base = 0 };
+        asm volatile ("sidt %[tab]"
+            : [tab] "=m" (res),
+        );
+        return res;
+    }
+
+    pub inline fn write(ptr: PseudoDescriptor) void {
+        asm volatile (
+            \\lidt (%%eax)
+            :
+            : [ptr] "{eax}" (&ptr),
+        );
+    }
+};
+
+/// The task register holds the 16-bit segment selector, base address (32 bits in protected mode; 64
+/// bits in IA-32e mode), segment limit, and descriptor attributes for the TSS of the current task.
+/// The selector references the TSS descriptor in the GDT. The base address specifies the linear
+/// address of byte 0 of the TSS; the segment limit specifies the number of bytes in the TSS. See
+/// also: Section 6.2.4, “Task Register”.
+/// The LTR and STR instructions load and store the segment selector part of the task register,
+/// respectively. When the LTR instruction loads a segment selector in the task register, the base
+/// address, limit, and descriptor attributes from the TSS descriptor are automatically loaded into
+/// the task register. On power up or reset of the processor, the base address is set to the default value
+/// of 0 and the limit is set to 0FFFFH.
+/// When a task switch occurs, the task register is automatically loaded with the segment selector
+/// and descriptor for the TSS for the new task. The contents of the task register are not automati-
+/// cally saved prior to writing the new TSS information into the register.
+///
+/// The task register holds the 16-bit segment selector and the entire segment descriptor (32-bit base
+/// address, 16-bit segment limit, and descriptor attributes) for the TSS of the current task (see
+/// Figure 2-5). This information is copied from the TSS descriptor in the GDT for the current task.
+/// Figure 6-5 shows the path the processor uses to access the TSS (using the information in the task
+/// register).
+/// The task register has a visible part (that can be read and changed by software) and an invisible
+/// part (maintained by the processor and is inaccessible by software). The segment selector in the
+/// visible portion points to a TSS descriptor in the GDT. The processor uses the invisible portion
+/// of the task register to cache the segment descriptor for the TSS. Caching these values in a
+/// register makes execution of the task more efficient. The LTR (load task register) and STR (store
+/// task register) instructions load and read the visible portion of the task register:
+/// The LTR instruction loads a segment selector (source operand) into the task register that points
+/// to a TSS descriptor in the GDT. It then loads the invisible portion of the task register with infor-
+/// mation from the TSS descriptor. LTR is a privileged instruction that may be executed only when
+/// the CPL is 0. It’s used during system initialization to put an initial value in the task register.
+/// Afterwards, the contents of the task register are changed implicitly when a task switch occurs.
+/// The STR (store task register) instruction stores the visible portion of the task register in a
+/// general-purpose register or memory. This instruction can be executed by code running at any
+/// privilege level in order to identify the currently running task. However, it is normally used only
+/// by operating system software.
+/// On power up or reset of the processor, segment selector and base address are set to the default
+/// value of 0; the limit is set to FFFFH.
+pub const TaskResgister = packed struct {
+    pub inline fn read() SegmentSelector {
+        var res:SegmentSelector = undefined;
+        //SegmentSelector{};
+        //PseudoDescriptor{ .limit = 0, .base = 0 };
+        asm volatile ("str %[tab]"
+            : [tab] "=m" (res),
+        );
+        return res;
+    }
+
+    pub inline fn write(ptr: SegmentSelector) void {
+        asm volatile (
+            \\ltr %[ptr]
+            :
+            : [ptr] "{ax}" (ptr),
+        );
+    }
+};
+
+/// CR0 — Contains system control flags that control operating mode and states of the
+/// processor.
+pub const Cr0 = packed struct(u32) {
+    /// Protection Enable (bit 0 of CR0) — Enables protected mode when set; enables real-
+    /// address mode when clear. This flag does not enable paging directly. It only enables
+    /// segment-level protection. To enable paging, both the PE and PG flags must be set.
+    /// See also: Section 9.9, “Mode Switching”.
+    protection: bool,
+    /// Monitor Coprocessor (bit 1 of CR0). — Controls the interaction of the WAIT (or
+    /// FWAIT) instruction with the TS flag (bit 3 of CR0). If the MP flag is set, a WAIT
+    /// instruction generates a device-not-available exception (#NM) if the TS flag is also set.
+    /// If the MP flag is clear, the WAIT instruction ignores the setting of the TS flag. Table 9-2
+    /// shows the recommended setting of this flag, depending on the IA-32 processor and x87
+    /// FPU or math coprocessor present in the system. Table 2-1 shows the interaction of the
+    /// MP, EM, and TS flags.
+    monitor_coprocessor: bool,
+    /// Emulation (bit 2 of CR0) — Indicates that the processor does not have an internal or
+    /// external x87 FPU when set; indicates an x87 FPU is present when clear. This flag also
+    /// affects the execution of MMX/SSE/SSE2/SSE3 instructions.
+    /// When the EM flag is set, execution of an x87 FPU instruction generates a device-not-
+    /// available exception (#NM). This flag must be set when the processor does not have an
+    /// internal x87 FPU or is not connected to an external math coprocessor. Setting this flag
+    /// forces all floating-point instructions to be handled by software emulation. Table 9-2
+    /// shows the recommended setting of this flag, depending on the IA-32 processor and x87
+    /// FPU or math coprocessor present in the system. Table 2-1 shows the interaction of the
+    /// EM, MP, and TS flags.
+    /// Also, when the EM flag is set, execution of an MMX instruction causes an invalid-
+    /// opcode exception (#UD) to be generated (see Table 11-1). Thus, if an IA-32 processor
+    /// incorporates MMX technology, the EM flag must be set to 0 to enable execution of
+    /// MMX instructions.
+    /// Similarly for SSE/SSE2/SSE3 extensions, when the EM flag is set, execution of most
+    /// SSE/SSE2/SSE3 instructions causes an invalid opcode exception (#UD) to be gener-
+    /// ated (see Table 12-1). If an IA-32 processor incorporates the SSE/SSE2/SSE3 exten-
+    /// sions, the EM flag must be set to 0 to enable execution of these extensions.
+    /// SSE/SSE2/SSE3 instructions not affected by the EM flag include: PAUSE,
+    /// PREFETCHh, SFENCE, LFENCE, MFENCE, MOVNTI, and CLFLUSH.
+    emulation: bool,
+    /// Task Switched (bit 3 of CR0) — Allows the saving of the x87 FPU/MMX/SSE/SSE2/
+    /// SSE3 context on a task switch to be delayed until an x87 FPU/MMX/SSE/SSE2/SSE3
+    /// instruction is actually executed by the new task. The processor sets this flag on every
+    /// task switch and tests it when executing x87 FPU/MMX/SSE/SSE2/SSE3 instructions.
+    ///
+    /// - If the TS flag is set and the EM flag (bit 2 of CR0) is clear, a device-not-available
+    /// exception (#NM) is raised prior to the execution of any x87 FPU/MMX/SSE/
+    /// SSE2/SSE3 instruction; with the exception of PAUSE, PREFETCHh, SFENCE,
+    /// LFENCE, MFENCE, MOVNTI, and CLFLUSH. See the paragraph below for the
+    /// special case of the WAIT/FWAIT instructions.
+    /// - If the TS flag is set and the MP flag (bit 1 of CR0) and EM flag are clear, an #NM
+    /// exception is not raised prior to the execution of an x87 FPU WAIT/FWAIT
+    /// instruction.
+    /// - If the EM flag is set, the setting of the TS flag has no affect on the execution of
+    /// x87 FPU/MMX/SSE/SSE2/SSE3 instructions.
+    ///
+    /// The processor does not automatically save the context of the x87 FPU, XMM, and
+    /// MXCSR registers on a task switch. Instead, it sets the TS flag, which causes the
+    /// processor to raise an #NM exception whenever it encounters an x87 FPU/MMX/SSE
+    /// /SSE2/SSE3 instruction in the instruction stream for the new task (with the exception
+    /// of the instructions listed above).
+    ///
+    /// The fault handler for the #NM exception can then be used to clear the TS flag (with the CLTS
+    /// instruction) and save the context of the x87 FPU, XMM, and MXCSR registers. If the task never
+    /// encounters an x87 FPU/MMX/SSE/SSE2/SSE3 instruction; the x87 FPU/MMX/SSE/SSE2/
+    /// SSE3 context is never saved.
+    task_switched: bool,
+    /// Extension Type (bit 4 of CR0) — Reserved in the Pentium 4, Intel Xeon, P6 family,
+    /// and Pentium processors. In the Pentium 4, Intel Xeon, and P6 family processors, this
+    /// flag is hardcoded to 1. In the Intel386 and Intel486 processors, this flag indicates
+    /// support of Intel 387 DX math coprocessor instructions when set.
+    extension_type: bool,
+    /// Numeric Error (bit 5 of CR0) — Enables the native (internal) mechanism for
+    /// reporting x87 FPU errors when set; enables the PC-style x87 FPU error reporting
+    /// mechanism when clear. When the NE flag is clear and the IGNNE# input is asserted,
+    /// x87 FPU errors are ignored. When the NE flag is clear and the IGNNE# input is deas-
+    /// serted, an unmasked x87 FPU error causes the processor to assert the FERR# pin to
+    /// generate an external interrupt and to stop instruction execution immediately before
+    /// executing the next waiting floating-point instruction or WAIT/FWAIT instruction.
+    /// The FERR# pin is intended to drive an input to an external interrupt controller (the
+    /// FERR# pin emulates the ERROR# pin of the Intel 287 and Intel 387 DX math copro-
+    /// cessors). The NE flag, IGNNE# pin, and FERR# pin are used with external logic to
+    /// implement PC-style error reporting.
+    /// See also: “Software Exception Handling” in Chapter 8 and Appendix D in the IA-32
+    /// Intel Architecture Software Developer’s Manual, Volume 1.
+    numeric_error: bool,
+    reserved0: u10,
+    /// Write Protect (bit 16 of CR0) — Inhibits supervisor-level procedures from writing
+    /// into user-level read-only pages when set; allows supervisor-level procedures to write
+    /// into user-level read-only pages when clear. This flag facilitates implementation of the
+    /// copy-on-write method of creating a new process (forking) used by operating systems
+    /// such as UNIX*.
+    write_protect: bool,
+    reserved1: bool = false,
+    /// Alignment Mask (bit 18 of CR0) — Enables automatic alignment checking when set;
+    /// disables alignment checking when clear. Alignment checking is performed only when
+    /// the AM flag is set, the AC flag in the EFLAGS register is set, CPL is 3, and the
+    /// processor is operating in either protected or virtual-8086 mode.
+    alignment: bool,
+
+    reserved2: u10,
+    /// Not Write-through (bit 29 of CR0) — When the NW and CD flags are clear, write-
+    /// back (for Pentium 4, Intel Xeon, P6 family, and Pentium processors) or write-through
+    /// (for Intel486 processors) is enabled for writes that hit the cache and invalidation cycles
+    /// are enabled. See Table 10-5 for detailed information about the affect of the NW flag on
+    /// caching for other settings of the CD and NW flags.
+    not_write_through: bool,
+    /// Cache Disable (bit 30 of CR0) — When the CD and NW flags are clear, caching of
+    /// memory locations for the whole of physical memory in the processor’s internal (and
+    /// external) caches is enabled. When the CD flag is set, caching is restricted as described
+    /// in Table 10-5. To prevent the processor from accessing and updating its caches, the CD
+    /// flag must be set and the caches must be invalidated so that no cache hits can occur.
+    /// See also: Section 10.5.3, “Preventing Caching” and Section 10.5, “Cache Control”.
+    cache_disable: bool,
+    /// Paging (bit 31 of CR0) — Enables paging when set; disables paging when clear.
+    /// When paging is disabled, all linear addresses are treated as physical addresses. The PG
+    /// flag has no effect if the PE flag (bit 0 of register CR0) is not also set; setting the PG
+    /// flag when the PE flag is clear causes a general-protection exception (#GP). See also:
+    /// Section 3.6, “Paging (Virtual Memory) Overview”.
+    /// On IA-32 processors that support Intel® EM64T, enabling and disabling IA-32e mode
+    /// operation also requires modifying CR0.PG.
+    paging: bool,
+
+    pub inline fn read() Cr0 {
+        return @bitCast(asm volatile (
+            \\ mov %%cr0, %%eax
+            : [res] "={eax}" (-> u32),
+        ));
+    }
+
+    pub inline fn write(cro: Cr0) void {
+        const raw: u32 = @bitCast(cro);
+        asm volatile (
+            \\ mov %[a], %%cr0
+            :
+            : [a] "{eax}" (raw),
+        );
+    }
+};
+
+/// CR1 — Reserved.
+pub const Cr1 = packed struct(u32) {
+    value: u32,
+
+    pub inline fn read() Cr1 {
+        return @bitCast(asm volatile (
+            \\ mov %%cr1, %%eax
+            : [res] "={eax}" (-> u32),
+        ));
+    }
+
+    pub inline fn write(cr: Cr1) void {
+        const raw: u32 = @bitCast(cr);
+        asm volatile (
+            \\ mov %[a], %%cr1
+            :
+            : [a] "{eax}" (raw),
+        );
+    }
+};
+
+/// CR2 — Contains the page-fault linear address (the linear address that caused a page fault).
+pub const Cr2 = packed struct(u32) {
+    value: u32,
+
+    pub inline fn read() Cr2 {
+        return @bitCast(asm volatile (
+            \\ mov %%cr2, %%eax
+            : [res] "={eax}" (-> u32),
+        ));
+    }
+
+    pub inline fn write(cr: Cr2) void {
+        const raw: u32 = @bitCast(cr);
+        asm volatile (
+            \\ mov %[a], %%cr2
+            :
+            : [a] "{eax}" (raw),
+        );
+    }
+};
+
+/// CR3 — Contains the physical address of the base of the page directory and two flags (PCD
+/// and PWT). This register is also known as the page-directory base register (PDBR). Only
+/// the most-significant bits (less the lower 12 bits) of the base address are specified; the lower
+/// 12 bits of the address are assumed to be 0. The page directory must thus be aligned to a
+/// page (4-KByte) boundary. The PCD and PWT flags control caching of the page directory
+/// in the processor’s internal data caches (they do not control TLB caching of page-directory
+/// information).
+/// When using the physical address extension, the CR3 register contains the base address of
+/// the page-directory-pointer table In IA-32e mode, the CR3 register contains the base
+/// address of the PML4 table.
+///
+/// See also: Section 3.8, “36-Bit Physical Addressing Using the PAE Paging Mechanism”.
+pub const Cr3 = packed struct(u32) {
+    res0: u3 = 0,
+    /// Page-level Writes Transparent (bit 3 of CR3) — Controls the write-through or write-
+    /// back caching policy of the current page directory. When the PWT flag is set, write-
+    /// through caching is enabled; when the flag is clear, write-back caching is enabled. This
+    /// flag affects only internal caches (both L1 and L2, when present). The processor ignores
+    /// this flag if paging is not used (the PG flag in register CR0 is clear) or the CD (cache
+    /// disable) flag in CR0 is set.
+    /// See also: Section 10.5, “Cache Control” (for more information about the use of this
+    /// flag) and Section 3.7.6, “Page-Directory and Page-Table Entries” (for a description of
+    /// a companion PCD flag in the page-directory and page-table entries).
+    page_level_writes_transparent: bool = false,
+    /// Page-level Cache Disable (bit 4 of CR3) — Controls caching of the current page
+    /// directory. When the PCD flag is set, caching of the page-directory is prevented; when
+    /// the flag is clear, the page-directory can be cached. This flag affects only the processor’s
+    /// internal caches (both L1 and L2, when present). The processor ignores this flag if
+    /// paging is not used (the PG flag in register CR0 is clear) or the CD (cache disable) flag
+    /// in CR0 is set.
+    /// See also: Chapter 10, Memory Cache Control (for more about the use of the PCD flag)
+    /// and Section 3.7.6, “Page-Directory and Page-Table Entries” (for a description of a
+    /// companion PCD flag in page-directory and page-table entries).
+    disable_page_level_cache: bool = false,
+    res1: u7 = 0,
+
+    page_directory_base: u20 = 0,
+
+    pub inline fn read() Cr3 {
+        return @bitCast(asm volatile (
+            \\ mov %%cr3, %%eax
+            : [res] "={eax}" (-> u32),
+        ));
+    }
+
+    pub inline fn write(cro: Cr3) void {
+        const raw: u32 = @bitCast(cro);
+        asm volatile (
+            \\ mov %[a], %%cr3
+            :
+            : [a] "{eax}" (raw),
+        );
+    }
+
+    pub fn setPageDirectoryBase(self: *Cr3, base: *PageDirectory) void {
+        self.page_directory_base = @truncate(@intFromPtr(base) >> 12);
+    }
+};
+
+/// CR4 — Contains a group of flags that enable several architectural extensions, and indicate
+/// operating system or executive support for specific processor capabilities. The control
+/// registers can be read and loaded (or modified) using the move-to-or-from-control-registers
+/// forms of the MOV instruction. In protected mode, the MOV instructions allow the control
+/// registers to be read or loaded (at privilege level 0 only). This restriction means that
+/// application programs or operating-system procedures (running at privilege levels 1, 2, or
+/// 3) are prevented from reading or loading the control registers.
+pub const Cr4 = packed struct(u32) {
+    /// Virtual-8086 Mode Extensions (bit 0 of CR4) — Enables interrupt- and exception-
+    /// handling extensions in virtual-8086 mode when set; disables the extensions when clear.
+    /// Use of the virtual mode extensions can improve the performance of virtual-8086 appli-
+    /// cations by eliminating the overhead of calling the virtual-8086 monitor to handle inter-
+    /// rupts and exceptions that occur while executing an 8086 program and, instead,
+    /// redirecting the interrupts and exceptions back to the 8086 program’s handlers. It also
+    /// provides hardware support for a virtual interrupt flag (VIF) to improve reliability of
+    /// running 8086 programs in multitasking and multiple-processor environments.
+    /// See also: Section 16.3, “Interrupt and Exception Handling in Virtual-8086 Mode”.
+    vitual8086_mode_extensions: bool,
+    /// Protected-Mode Virtual Interrupts (bit 1 of CR4) — Enables hardware support for
+    /// a virtual interrupt flag (VIF) in protected mode when set; disables the VIF flag in
+    /// protected mode when clear.
+    /// See also: Section 16.4, “Protected-Mode Virtual Interrupts”.
+    protected_mode_virtual_interrupts: bool,
+    /// Time Stamp Disable (bit 2 of CR4) — Restricts the execution of the RDTSC instruc-
+    /// tion to procedures running at privilege level 0 when set; allows RDTSC instruction to
+    /// be executed at any privilege level when clear.
+    timestamp_disable: bool,
+    /// Debugging Extensions (bit 3 of CR4) — References to debug registers DR4 and DR5
+    /// cause an undefined opcode (#UD) exception to be generated when set; when clear,
+    /// processor aliases references to registers DR4 and DR5 for compatibility with software
+    /// written to run on earlier IA-32 processors.
+    /// See also: Section 15.2.2, “Debug Registers DR4 and DR5”.
+    debugging_extensions: bool,
+    /// Page Size Extensions (bit 4 of CR4) — Enables 4-MByte pages when set; restricts
+    /// pages to 4 KBytes when clear.
+    /// See also: Section 3.6.1, “Paging Options”.
+    page_size_extensions: bool,
+    /// Physical Address Extension (bit 5 of CR4) — When set, enables paging mechanism
+    /// to reference greater-or-equal-than-36-bit physical addresses. When clear, restricts
+    /// physical addresses to 32 bits. PAE must be enabled to enable IA-32e mode operation.
+    /// Enabling and disabling IA-32e mode operation also requires modifying CR4.PAE.
+    /// See also: Section 3.8, “36-Bit Physical Addressing Using the PAE Paging
+    /// Mechanism”.
+    physical_address_extension: bool,
+    /// Machine-Check Enable (bit 6 of CR4) — Enables the machine-check exception
+    /// when set; disables the machine-check exception when clear.
+    /// See also: Chapter 14, Machine-Check Architecture.
+    machine_check_enable: bool,
+    /// Page Global Enable (bit 7 of CR4) — (Introduced in the P6 family processors.)
+    /// Enables the global page feature when set; disables the global page feature when clear.
+    /// The global page feature allows frequently used or shared pages to be marked as global
+    /// to all users (done with the global flag, bit 8, in a page-directory or page-table entry).
+    /// Global pages are not flushed from the translation-lookaside buffer (TLB) on a task
+    /// switch or a write to register CR3.
+    ///
+    ///  When enabling the global page feature, paging must be enabled (by setting the PG flag
+    /// in control register CR0) before the PGE flag is set. Reversing this sequence may affect
+    /// program correctness, and processor performance will be impacted.
+    /// See also: Section 3.12, “Translation Lookaside Buffers (TLBs)”.
+    page_global_enable: bool,
+    /// Performance-Monitoring Counter Enable (bit 8 of CR4) — Enables execution of
+    /// the RDPMC instruction for programs or procedures running at any protection level
+    /// when set; RDPMC instruction can be executed only at protection level 0 when clear.
+    performance_monitoring_counter_enable: bool,
+    /// Operating System Support for FXSAVE and FXRSTOR instructions (bit 9 of
+    /// CR4) — When set, this flag: (1) indicates to software that the operating system
+    /// supports the use of the FXSAVE and FXRSTOR instructions, (2) enables the FXSAVE
+    /// and FXRSTOR instructions to save and restore the contents of the XMM and MXCSR
+    /// registers along with the contents of the x87 FPU and MMX registers, and (3) enables
+    /// the processor to execute SSE/SSE2/SSE3 instructions, with the exception of the
+    /// PAUSE, PREFETCHh, SFENCE, LFENCE, MFENCE, MOVNTI, and CLFLUSH.
+    ///
+    /// If this flag is clear, the FXSAVE and FXRSTOR instructions will save and restore the
+    /// contents of the x87 FPU and MMX instructions, but they may not save and restore the
+    /// contents of the XMM and MXCSR registers. Also, the processor will generate an
+    /// invalid opcode exception (#UD) if it attempts to execute any SSE/SSE2/SSE3 instruc-
+    /// tion, with the exception of PAUSE, PREFETCHh, SFENCE, LFENCE, MFENCE,
+    /// MOVNTI, and CLFLUSH. The operating system or executive must explicitly set this
+    /// flag.
+    ///
+    /// NOTE
+    /// - CPUID feature flags FXSR, SSE, SSE2, and SSE3 indicate availability
+    /// of the FXSAVE/FXRESTOR instructions, SSE extensions, SSE2
+    /// extensions, and SSE3 extensions respectively. The OSFXSR bit
+    /// provides operating system software with a means of enabling these
+    /// features and indicating that the operating system supports the features.
+    osfxsr: bool,
+    /// Operating System Support for Unmasked SIMD Floating-Point Exceptions (bit 10
+    /// of CR4) — When set, indicates that the operating system supports the handling of
+    /// unmasked SIMD floating-point exceptions through an exception handler that is invoked
+    /// when a SIMD floating-point exception (#XF) is generated. SIMD floating-point excep-
+    /// tions are only generated by SSE/SSE2/SSE3 SIMD floating-point instructions.
+    ///
+    /// The operating system or executive must explicitly set this flag. If this flag is not set, the
+    /// processor will generate an invalid opcode exception (#UD) whenever it detects an
+    /// unmasked SIMD floating-point exception.
+    osxmmexcpt: bool,
+
+    res0: u21,
+
+    pub inline fn read() Cr4 {
+        return @bitCast(asm volatile (
+            \\ mov %%cr4, %%eax
+            : [res] "={eax}" (-> u32),
+        ));
+    }
+
+    pub inline fn write(cro: Cr4) void {
+        const raw: u32 = @bitCast(cro);
+        asm volatile (
+            \\ mov %[a], %%cr4
+            :
+            : [a] "{eax}" (raw),
+        );
+    }
+};
+
+/// CR8 — Provides read and write access to the Task Priority Register (TPR). It specifies the
+/// priority threshold value that operating systems use to control the priority class of external
+/// interrupts allowed to interrupt the processor. This register is available only in 64-bit mode.
+/// However, interrupt filtering continues to apply in compatibility mode.
+pub const Cr8 = struct {};
+
+pub fn DebugRegister(comptime n: u8) type {
+    return struct {
+        pub inline fn read() u32 {
+            switch (n) {
+                inline 0 => {
+                    return asm volatile (
+                        \\ mov %%dr0, %%eax
+                        : [res] "={eax}" (-> u32),
+                    );
+                },
+                inline 1 => {
+                    return asm volatile (
+                        \\ mov %%dr1, %%eax
+                        : [res] "={eax}" (-> u32),
+                    );
+                },
+                inline 2 => {
+                    return asm volatile (
+                        \\ mov %%dr2, %%eax
+                        : [res] "={eax}" (-> u32),
+                    );
+                },
+                inline 3 => {
+                    return asm volatile (
+                        \\ mov %%dr3, %%eax
+                        : [res] "={eax}" (-> u32),
+                    );
+                },
+                inline 4 => {
+                    return asm volatile (
+                        \\ mov %%dr4, %%eax
+                        : [res] "={eax}" (-> u32),
+                    );
+                },
+                inline 5 => {
+                    return asm volatile (
+                        \\ mov %%dr5, %%eax
+                        : [res] "={eax}" (-> u32),
+                    );
+                },
+                inline 6 => {
+                    return asm volatile (
+                        \\ mov %%dr6, %%eax
+                        : [res] "={eax}" (-> u32),
+                    );
+                },
+                inline 7 => {
+                    return asm volatile (
+                        \\ mov %%dr7, %%eax
+                        : [res] "={eax}" (-> u32),
+                    );
+                },
+                inline else => {
+                    @compileError("invalid debug register number");
+                },
+            }
+        }
+
+        pub inline fn write(data: u32) void {
+            switch (n) {
+                inline 0 => {
+                    return asm volatile (
+                        \\ mov %[a], %%dr0
+                        :
+                        : [a] "{eax}" (data),
+                    );
+                },
+                inline 1 => {
+                    return asm volatile (
+                        \\ mov %[a], %%dr1
+                        :
+                        : [a] "{eax}" (data),
+                    );
+                },
+                inline 2 => {
+                    return asm volatile (
+                        \\ mov %[a], %%dr2
+                        :
+                        : [a] "{eax}" (data),
+                    );
+                },
+                inline 3 => {
+                    return asm volatile (
+                        \\ mov %[a], %%dr3
+                        :
+                        : [a] "{eax}" (data),
+                    );
+                },
+                inline 4 => {
+                    return asm volatile (
+                        \\ mov %[a], %%dr4
+                        :
+                        : [a] "{eax}" (data),
+                    );
+                },
+                inline 5 => {
+                    return asm volatile (
+                        \\ mov %[a], %%dr5
+                        :
+                        : [a] "{eax}" (data),
+                    );
+                },
+                inline 6 => {
+                    return asm volatile (
+                        \\ mov %[a], %%dr6
+                        :
+                        : [a] "{eax}" (data),
+                    );
+                },
+                inline 7 => {
+                    return asm volatile (
+                        \\ mov %[a], %%dr7
+                        :
+                        : [a] "{eax}" (data),
+                    );
+                },
+                inline else => {
+                    @compileError("invalid debug register number");
+                },
+            }
+        }
+    };
+}
+
+/// The INVD (invalidate cache with no writeback) instruction invalidates all data and
+/// instruction entries in the internal caches and sends a signal to the external caches indicating that
+/// they should be also be invalidated.
+/// The WBINVD (invalidate cache with writeback) instruction performs the same function as the
+/// INVD instruction, except that it writes back modified lines in its internal caches to memory
+/// before it invalidates the caches. After invalidating the internal caches, WBINVD signals
+/// external caches to write back modified data and invalidate their contents.
+pub inline fn invalidateCache(comptime write_back: bool) void {
+    if (write_back) {
+        asm volatile ("wbinvd");
+    } else {
+        asm volatile ("invd");
+    }
+}
+
+/// The INVLPG (invalidate TLB entry) instruction invalidates (flushes) the TLB entry for a spec-
+/// ified page.
+pub inline fn invalidateTlb() void {
+    asm volatile ("invlpg");
+}
+
+pub inline fn TlbFlush() void {
+    asm volatile(
+        \\ movl %cr3, %eax
+        \\ movl %eax, %cr3
+    );
+}
+
+/// The HLT (halt processor) instruction stops the processor until an enabled interrupt (such as NMI
+/// or SMI, which are normally enabled), a debug exception, the BINIT# signal, the INIT# signal,
+/// or the RESET# signal is received. The processor generates a special bus cycle to indicate that
+/// the halt mode has been entered.
+pub inline fn haltProcessor() void {
+    asm volatile ("hlt");
+}
+
+/// A segment descriptor is a data structure in a GDT or LDT that provides the processor with the
+/// size and location of a segment, as well as access control and status information. Segment
+/// descriptors are typically created by compilers, linkers, loaders, or the operating system or exec-
+/// utive, but not application programs. Figure 3-8 illustrates the general descriptor format for all
+/// types of segment descriptors.
+pub const SegmentDescriptor = packed struct(u64) {
+    pub const TypeEnum = enum { data, code, system };
+
+    pub fn DescriptorType(comptime t: TypeEnum) type {
+        return switch (t) {
+            inline .data => DataType,
+            inline .code => CodeType,
+            inline .system => SystemType,
+        };
+    }
+
+    pub const Type = packed union { data: DataType, code: CodeType, system: SystemType };
+
+    pub const DataType = packed struct(u4) {
+        /// The accessed bit indicates whether the segment has been accessed since the last time the oper-
+        /// ating-system or executive cleared the bit. The processor sets this bit whenever it loads a segment
+        /// selector for the segment into a segment register, assuming that the type of memory that contains
+        /// the segment descriptor supports processor writes. The bit remains set until explicitly cleared.
+        /// This bit can be used both for virtual memory management and for debugging.
+        accessed: bool = false,
+        /// Data segments can be read-
+        /// only or read/write segments, depending on the setting of the write-enable bit.
+        /// Stack segments are data segments which must be read/write segments.
+        ///
+        /// Loading the SS register
+        /// with a segment selector for a nonwritable data segment generates a general-protection exception
+        /// (#GP).
+        write_enabled: bool = true,
+        /// If the size of a stack segment needs to be changed dynamically, the stack segment can be
+        /// an expand-down data segment (expansion-direction flag set). Here, dynamically changing the
+        /// segment limit causes stack space to be added to the bottom of the stack. If the size of a stack
+        /// segment is intended to remain static, the stack segment may be either an expand-up or expand-
+        /// down type.
+        expand_down: bool = false,
+        is_code: bool = false,
+
+        pub inline fn toInt(self: DataType) u4 {
+            return @bitCast(self);
+        }
+    };
+
+    pub const CodeType = packed struct(u4) {
+        /// The accessed bit indicates whether the segment has been accessed since the last time the oper-
+        /// ating-system or executive cleared the bit. The processor sets this bit whenever it loads a segment
+        /// selector for the segment into a segment register, assuming that the type of memory that contains
+        /// the segment descriptor supports processor writes. The bit remains set until explicitly cleared.
+        /// This bit can be used both for virtual memory management and for debugging.
+        accessed: bool = false,
+        /// Code segments can be execute-only or execute/read, depending
+        /// on the setting of the read-enable bit. An execute/read segment might be used when constants or
+        /// other static data have been placed with instruction code in a ROM. Here, data can be read from
+        /// the code segment either by using an instruction with a CS override prefix or by loading a
+        /// segment selector for the code segment in a data-segment register (the DS, ES, FS, or GS regis-
+        /// ters). In protected mode, code segments are not writable.
+        read_enabled: bool = true,
+        /// Code segments can be either conforming or nonconforming. A transfer of execution into a more-
+        /// privileged conforming segment allows execution to continue at the current privilege level. A
+        /// transfer into a nonconforming segment at a different privilege level results in a general-protec-
+        /// tion exception (#GP), unless a call gate or task gate is used (see Section 4.8.1, “Direct Calls or
+        /// Jumps to Code Segments”, for more information on conforming and nonconforming code
+        /// segments). System utilities that do not access protected facilities and handlers for some types of
+        /// exceptions (such as, divide error or overflow) may be loaded in conforming code segments. Util-
+        /// ities that need to be protected from less privileged programs and procedures should be placed in
+        /// nonconforming code segments.
+        /// **NOTE**
+        ///
+        ///  - Execution cannot be transferred by a call or a jump to a less-privileged
+        /// (numerically higher privilege level) code segment, regardless of whether the
+        /// target segment is a conforming or nonconforming code segment. Attempting
+        /// such an execution transfer will result in a general-protection exception.
+        ///
+        /// All data segments are nonconforming, meaning that they cannot be accessed by less privileged
+        /// programs or procedures (code executing at numerically high privilege levels). Unlike code
+        /// segments, however, data segments can be accessed by more privileged programs or procedures
+        /// (code executing at numerically lower privilege levels) without using a special access gate.
+        /// If the segment descriptors in the GDT or an LDT are placed in ROM, the processor can enter an
+        /// indefinite loop if software or the processor attempts to update (write to) the ROM-based
+        /// segment descriptors. To prevent this problem, set the accessed bits for all segment descriptors
+        /// placed in a ROM. Also, remove operating-system or executive code that attempts to modify
+        /// segment descriptors located in ROM.
+        conforming: bool = false,
+        is_code: bool = true,
+
+        pub inline fn toInt(self: CodeType) u4 {
+            return @bitCast(self);
+        }
+    };
+
+    pub const SystemType = packed struct(u4) {
+        @"0": u1 = 0,
+        @"1": u1 = 0,
+        @"2": u1 = 0,
+        @"3": u1 = 0,
+
+        pub inline fn zero() SystemType {
+            return .{};
+        }
+
+        pub inline fn toInt(self: SystemType) u4 {
+            return @bitCast(self);
+        }
+
+        pub inline fn Tss16Available() SystemType {
+            return .{ .@"0" = 1 };
+        }
+
+        pub inline fn localDescriptorTable() SystemType {
+            return .{ .@"1" = 1 };
+        }
+
+        pub inline fn Tss16Busy() SystemType {
+            return .{ .@"1" = 1, .@"0" = 1 };
+        }
+
+        pub inline fn callGate16() SystemType {
+            return .{ .@"2" = 1 };
+        }
+
+        pub inline fn taskGate() SystemType {
+            return .{ .@"2" = 1, .@"0" = 1 };
+        }
+
+        pub inline fn interruptGate16() SystemType {
+            return .{ .@"1" = 1, .@"2" = 1 };
+        }
+
+        pub inline fn trapGate16() SystemType {
+            return .{ .@"1" = 1, .@"2" = 1, .@"0" = 1 };
+        }
+
+        pub inline fn tss32Available() SystemType {
+            return .{ .@"3" = 1, .@"0" = 1 };
+        }
+
+        pub inline fn tss32Busy() SystemType {
+            return .{ .@"3" = 1, .@"1" = 1, .@"0" = 1 };
+        }
+
+        pub inline fn callGate32() SystemType {
+            return .{ .@"3" = 1, .@"2" = 1 };
+        }
+
+        pub inline fn interruptGate32() SystemType {
+            return .{ .@"3" = 1, .@"2" = 1, .@"1" = 1 };
+        }
+
+        pub inline fn trapGate32() SystemType {
+            return .{ .@"3" = 1, .@"2" = 1, .@"1" = 1, .@"0" = 1 };
+        }
+    };
+
+    pub const Flags = packed struct(u12) {
+        /// **S (descriptor type) flag**
+        ///
+        /// Specifies whether the segment descriptor is for a system segment (S flag is
+        /// clear) or a code or data segment (S flag is set).
+        descriptor_type: bool = true,
+        /// **DPL (descriptor privilege level) field**
+        ///
+        /// Specifies the privilege level of the segment. The privilege level can range from
+        /// 0 to 3, with 0 being the most privileged level. The DPL is used to control access
+        /// to the segment. See Section 4.5, “Privilege Levels”, for a description of the
+        /// relationship of the DPL to the CPL of the executing code segment and the RPL
+        /// of a segment selector.
+        privilege_level: u2,
+        /// **P (segment-present) flag**
+        ///
+        /// Indicates whether the segment is present in memory (set) or not present (clear).
+        /// If this flag is clear, the processor generates a segment-not-present exception
+        /// (#NP) when a segment selector that points to the segment descriptor is loaded
+        /// into a segment register. Memory management software can use this flag to
+        /// control which segments are actually loaded into physical memory at a given
+        /// time. It offers a control in addition to paging for managing virtual memory.
+        /// Figure 3-9 shows the format of a segment descriptor when the segment-present
+        /// flag is clear. When this flag is clear, the operating system or executive is free
+        /// to use the locations marked “Available” to store its own data, such as informa-
+        /// tion regarding the whereabouts of the missing segment.
+        present: bool = true,
+        limit_high: u4 = std.math.maxInt(u4),
+        avl: bool = false,
+        /// **L (64-bit code segment) flag**
+        ///
+        /// In IA-32e mode, bit 21 of the second doubleword of the segment descriptor
+        /// indicates whether a code segment contains native 64-bit code. A value of 1
+        /// indicates instructions in this code segment are executed in 64-bit mode. A
+        /// value of 0 indicates the instructions in this code segment are executed in
+        /// compatibility mode. If L-bit is set, then D-bit must be cleared. When not in
+        /// IA-32e mode or for non-code segments, bit 21 is reserved and should always
+        /// be set to 0.
+        l: bool = false,
+        /// **D/B (default operation size/default stack pointer size and/or upper bound) flag**
+        ///
+        /// Performs different functions depending on whether the segment descriptor is
+        /// an executable code segment, an expand-down data segment, or a stack
+        /// segment. (This flag should always be set to 1 for 32-bit code and data segments
+        /// and to 0 for 16-bit code and data segments.)
+        /// - **Executable code segment.** The flag is called the D flag and it indicates the
+        /// default length for effective addresses and operands referenced by instruc-
+        /// tions in the segment. If the flag is set, 32-bit addresses and 32-bit or 8-bit
+        /// operands are assumed; if it is clear, 16-bit addresses and 16-bit or 8-bit
+        /// operands are assumed.
+        /// The instruction prefix 66H can be used to select an operand size other than
+        /// the default, and the prefix 67H can be used select an address size other than
+        /// the default.
+        /// - **Stack segment (data segment pointed to by the SS register).** The flag is
+        /// called the B (big) flag and it specifies the size of the stack pointer used for
+        /// implicit stack operations (such as pushes, pops, and calls). If the flag is set,
+        /// a 32-bit stack pointer is used, which is stored in the 32-bit ESP register; if
+        /// the flag is clear, a 16-bit stack pointer is used, which is stored in the 16-bit
+        /// SP register. If the stack segment is set up to be an expand-down data
+        /// segment (described in the next paragraph), the B flag also specifies the
+        /// upper bound of the stack segment.
+        /// - **Expand-down data segment.** The flag is called the B flag and it specifies
+        /// the upper bound of the segment. If the flag is set, the upper bound is
+        /// FFFFFFFFH (4 GBytes); if the flag is clear, the upper bound is FFFFH
+        /// (64 KBytes).
+        db: bool = true,
+        /// **G (granularity) flag**
+        ///
+        /// Determines the scaling of the segment limit field. When the granularity flag is
+        /// clear, the segment limit is interpreted in byte units; when flag is set, the
+        /// segment limit is interpreted in 4-KByte units. (This flag does not affect the
+        /// granularity of the base address; it is always byte granular.) When the granu-
+        /// larity flag is set, the twelve least significant bits of an offset are not tested when
+        /// checking the offset against the segment limit. For example, when the granu-
+        /// larity flag is set, a limit of 0 results in valid offsets from 0 to 4095.
+        granularity: bool = true,
+    };
+    /// Specifies the size of the segment. The processor puts together the two segment
+    /// limit fields to form a 20-bit value. The processor interprets the segment limit
+    /// in one of two ways, depending on the setting of the G (granularity) flag:
+    /// - If the granularity flag is clear, the segment size can range from 1 byte to 1
+    /// MByte, in byte increments.
+    /// - If the granularity flag is set, the segment size can range from 4 KBytes to
+    /// 4 GBytes, in 4-KByte increments.
+    ///
+    /// The processor uses the segment limit in two different ways, depending on
+    /// whether the segment is an expand-up or an expand-down segment. See Section
+    /// 3.4.5.1, “Code- and Data-Segment Descriptor Types”, for more information
+    /// about segment types. For expand-up segments, the offset in a logical address
+    /// can range from 0 to the segment limit. Offsets greater than the segment limit
+    /// generate general-protection exceptions (#GP). For expand-down segments, the
+    /// segment limit has the reverse function; the offset can range from the segment
+    /// limit to FFFFFFFFH or FFFFH, depending on the setting of the B flag. Offsets
+    /// less than the segment limit generate general-protection exceptions. Decreasing
+    /// the value in the segment limit field for an expand-down segment allocates new
+    /// memory at the bottom of the segment's address space, rather than at the top.
+    /// IA-32 architecture stacks always grow downwards, making this mechanism
+    /// convenient for expandable stacks.
+    limit_low: u16 = std.math.maxInt(u16),
+    /// ***Base address fields***
+    ///
+    /// Defines the location of byte 0 of the segment within the 4-GByte linear address
+    /// space. The processor puts together the three base address fields to form a single
+    /// 32-bit value. Segment base addresses should be aligned to 16-byte boundaries.
+    /// Although 16-byte alignment is not required, this alignment allows programs to
+    /// maximize performance by aligning code and data on 16-byte boundaries.
+    base_low: u24 = 0,
+
+    /// Indicates the segment or gate type and specifies the kinds of access that can be
+    /// made to the segment and the direction of growth. The interpretation of this field
+    /// depends on whether the descriptor type flag specifies an application (code or
+    /// data) descriptor or a system descriptor. The encoding of the type field is
+    /// different for code, data, and system descriptors (see Figure 4-1). See Section
+    /// 3.4.5.1, “Code- and Data-Segment Descriptor Types”, for a description of how
+    /// this field is used to specify code and data-segment types.
+    ///
+    descriptor_type: Type,
+
+    flags: Flags,
+
+    base_high: u8 = 0,
+
+    pub fn init(base: u32, limit: u20, descriptor_type: Type, flags: Flags) SegmentDescriptor {
+        var f = flags;
+        f.limit_high = @intCast(limit >> 16);
+        return SegmentDescriptor{ .base_low = @truncate(base), .limit_low = @truncate(limit), .flags = f, .descriptor_type = descriptor_type, .base_high = @intCast(base >> 24) };
+    }
+
+    pub inline fn getLimit(self: *const SegmentDescriptor) u20 {
+        return @as(u20, @intCast(self.flags.limit_high)) << 16 | self.limit_low;
+    }
+
+    pub inline fn getBase(self: *const SegmentDescriptor) u32 {
+        return @as(u32, @intCast(self.base_high)) << 24 | self.base_low;
+    }
+
+    pub inline fn setLimit(self: *SegmentDescriptor, value: u20) void {
+        self.flags.limit_high = @truncate(value >> 16);
+        self.limit_low = @truncate(value);
+    }
+
+    pub inline fn setBase(self: *SegmentDescriptor, value: u32) void {
+        self.base_high = @truncate(value >> 24);
+        self.base_low = @truncate(value);
+    }
+
+    pub inline fn zero() SegmentDescriptor {
+        const a: u64 = 0;
+        return @bitCast(a);
+    }
+};
+
+pub inline fn enablePaging() void {
+    var cr0 = Cr0.read();
+    cr0.paging = true;
+    cr0.write();
+}
+
+pub inline fn enable4MPages() void {
+    var cr4 = Cr4.read();
+    cr4.page_size_extensions = true;
+    cr4.write();
+}
+
+/// Linear Address Translation (4-KByte Pages)
+pub const LinearAddress4K = packed struct(u32) {
+    /// **Page-offset**
+    /// Bits 0 through 11 provides an offset to a physical address in the page.
+    page_offset: u12,
+    /// **Page-table entry** — Bits 12 through 21 of the linear address provide an offset to an entry
+    /// in the selected page table. This entry provides the base physical address of a page in
+    /// physical memory.
+    page_table_entry: u10,
+    /// **Page-directory entry** — Bits 22 through 31 provide an offset to an entry in the page
+    /// directory. The selected entry provides the base physical address of a page table.
+    page_directory_entry: u10,
+};
+
+/// Linear Address Translation (4-MByte Pages)
+pub const LinearAddress4M = packed struct(u32) {
+    /// Page offset—Bits 0 through 21 provides an offset to a physical address in the page.
+    page_offset: u22,
+    /// **Page directory entry** —Bits 22 through 31 provide an offset to an entry in the page
+    /// directory. The selected entry provides the base physical address of a 4-MByte page.
+    page_directory_entry: u10,
+};
+
+/// Format of Page-Directory and Page-Table Entries for 4-KByte Pages
+/// and 32-Bit Physical Addresses
+pub const PageDirectoryEntry4K = packed struct(u32) {
+    /// **Present (P) flag, bit 0**
+    /// Indicates whether the page or page table being pointed to by the entry is
+    /// currently loaded in physical memory. When the flag is set, the page is in phys-
+    /// ical memory and address translation is carried out. When the flag is clear, the
+    /// page is not in memory and, if the processor attempts to access the page, it
+    /// generates a page-fault exception (#PF).
+    /// The processor does not set or clear this flag; it is up to the operating system or
+    /// executive to maintain the state of the flag.
+    /// If the processor generates a page-fault exception, the operating system gener-
+    /// ally needs to carry out the following operations:
+    /// - 1. Copy the page from disk storage into physical memory.
+    /// - 2.
+    ///  Load the page address into the page-table or page-directory entry and set
+    /// its present flag. Other flags, such as the dirty and accessed flags, may also
+    /// be set at this time.
+    /// - 3. Invalidate the current page-table entry in the TLB (see Section 3.12,
+    /// “Translation Lookaside Buffers (TLBs)”, for a discussion of TLBs and
+    /// how to invalidate them).
+    /// - 4. Return from the page-fault handler to restart the interrupted program (or
+    /// task).
+    present: bool = true,
+    /// **Read/write (R/W) flag, bit 1**
+    /// Specifies the read-write privileges for a page or group of pages (in the case of
+    /// a page-directory entry that points to a page table). When this flag is clear, the
+    /// page is read only; when the flag is set, the page can be read and written into.
+    /// This flag interacts with the U/S flag and the WP flag in register CR0. See
+    /// Section 4.11, “Page-Level Protection”, and Table 4-3 for a detailed discussion
+    /// of the use of these flags.
+    read_write: bool = true,
+    /// **User/supervisor (U/S) flag, bit 2**
+    /// Specifies the user-supervisor privileges for a page or group of pages (in the
+    /// case of a page-directory entry that points to a page table). When this flag is
+    /// clear, the page is assigned the supervisor privilege level; when the flag is set,
+    /// the page is assigned the user privilege level. This flag interacts with the R/W
+    /// flag and the WP flag in register CR0. See Section 4.11, “Page-Level Protec-
+    /// tion”, and Table 4-3 for a detail discussion of the use of these flags.
+    sepervisor: bool = true,
+    /// **Page-level write-through (PWT) flag, bit 3**
+    /// Controls the write-through or write-back caching policy of individual pages or
+    /// page tables. When the PWT flag is set, write-through caching is enabled for the
+    /// associated page or page table; when the flag is clear, write-back caching is
+    /// enabled for the associated page or page table. The processor ignores this flag if
+    /// the CD (cache disable) flag in CR0 is set. See Section 10.5, “Cache Control”,
+    /// for more information about the use of this flag. See Section 2.5, “Control
+    /// Registers”, for a description of a companion PWT flag in control register CR3.
+    page_level_write_through: bool = false,
+    /// **Page-level cache disable (PCD) flag, bit 4**
+    /// Controls the caching of individual pages or page tables. When the PCD flag is
+    /// set, caching of the associated page or page table is prevented; when the flag is
+    /// clear, the page or page table can be cached. This flag permits caching to be
+    /// disabled for pages that contain memory-mapped I/O ports or that do not
+    /// provide a performance benefit when cached. The processor ignores this flag
+    /// (assumes it is set) if the CD (cache disable) flag in CR0 is set. See Chapter 10,
+    /// Memory Cache Control, for more information about the use of this flag. See
+    /// Section 2.5, “Control Registers”, for a description of a companion PCD flag in
+    /// control register CR3.
+    page_level_cache_disable: bool = false,
+    /// **Accessed (A) flag, bit 5**
+    /// Indicates whether a page or page table has been accessed (read from or written
+    /// to) when set. Memory management software typically clears this flag when a
+    /// page or page table is initially loaded into physical memory. The processor then
+    /// sets this flag the first time a page or page table is accessed.
+    ///
+    /// This flag is a “sticky” flag, meaning that once set, the processor does not
+    /// implicitly clear it. Only software can clear this flag. The accessed and dirty
+    /// flags are provided for use by memory management software to manage the
+    /// transfer of pages and page tables into and out of physical memory.
+    /// **NOTE:**
+    /// The accesses used by the processor to set this bit may or may not be
+    /// exposed to the processor’s Self-Modifying Code detection logic. If the
+    /// processor is executing code from the same memory area that is being used for
+    /// page table structures, the setting of the bit may or may not result in an imme-
+    /// diate change to the executing code stream.
+    accessed: bool = false,
+    /// **bit 6**
+    reserved: bool = false,
+    /// **Page size (PS) flag, bit 7 page-directory entries for 4-KByte pages**
+    /// Determines the page size. When this flag is clear, the page size is 4 KBytes and
+    /// the page-directory entry points to a page table. When the flag is set, the page
+    /// size is 4 MBytes for normal 32-bit addressing (and 2 MBytes if extended phys-
+    /// ical addressing is enabled) and the page-directory entry points to a page. If the
+    /// page-directory entry points to a page table, all the pages associated with that
+    /// page table will be 4-KByte pages.
+    is_page: bool = false,
+    /// **Global (G) flag, bit 8**
+    /// (Introduced in the Pentium Pro processor) — Indicates a global page when set.
+    /// When a page is marked global and the page global enable (PGE) flag in register
+    /// CR4 is set, the page-table or page-directory entry for the page is not invalidated
+    /// in the TLB when register CR3 is loaded or a task switch occurs. This flag is
+    /// provided to prevent frequently used pages (such as pages that contain kernel or
+    /// other operating system or executive code) from being flushed from the TLB.
+    /// Only software can set or clear this flag. For page-directory entries that point to
+    /// page tables, this flag is ignored and the global characteristics of a page are set
+    /// in the page-table entries. See Section 3.12, “Translation Lookaside Buffers
+    /// (TLBs)”, for more information about the use of this flag. (This bit is reserved
+    /// in Pentium and earlier IA-32 processors.)
+    global: bool = false,
+
+    available_bits: u3 = 0,
+
+    /// (Page-directory entries for 4-KByte page tables) — Specifies the physical
+    /// address of the first byte of a page table. The bits in this field are interpreted as
+    /// the 20 most-significant bits of the physical address, which forces page tables to
+    /// be aligned on 4-KByte boundaries.
+    page_table_base_address: u20 = 0,
+
+    pub inline fn setPageTableBaseAddress(self: *PageDirectoryEntry4K, addr: usize) void {
+        const int: usize = @bitCast(self.*);
+        self.* = @bitCast(int | addr);
+    }
+
+    pub inline fn getPageTableBaseAddress(self: *const PageDirectoryEntry4K) usize {
+        return (@as(usize,@bitCast(self.*)) >> 12) << 12;
+    }
+
+    pub inline fn zero() PageDirectoryEntry4K {
+        const z: usize = 0;
+        return @bitCast(z);
+    }
+};
+
+/// Format of Page-Directory and Page-Table Entries for 4-KByte Pages
+/// and 32-Bit Physical Addresses
+pub const PageTableEntry4K = packed struct(u32) {
+    /// **Present (P) flag, bit 0**
+    /// Indicates whether the page or page table being pointed to by the entry is
+    /// currently loaded in physical memory. When the flag is set, the page is in phys-
+    /// ical memory and address translation is carried out. When the flag is clear, the
+    /// page is not in memory and, if the processor attempts to access the page, it
+    /// generates a page-fault exception (#PF).
+    /// The processor does not set or clear this flag; it is up to the operating system or
+    /// executive to maintain the state of the flag.
+    /// If the processor generates a page-fault exception, the operating system gener-
+    /// ally needs to carry out the following operations:
+    /// - 1. Copy the page from disk storage into physical memory.
+    /// - 2.
+    ///  Load the page address into the page-table or page-directory entry and set
+    /// its present flag. Other flags, such as the dirty and accessed flags, may also
+    /// be set at this time.
+    /// - 3. Invalidate the current page-table entry in the TLB (see Section 3.12,
+    /// “Translation Lookaside Buffers (TLBs)”, for a discussion of TLBs and
+    /// how to invalidate them).
+    /// - 4. Return from the page-fault handler to restart the interrupted program (or
+    /// task).
+    present: bool = true,
+    /// **Read/write (R/W) flag, bit 1**
+    /// Specifies the read-write privileges for a page or group of pages (in the case of
+    /// a page-directory entry that points to a page table). When this flag is clear, the
+    /// page is read only; when the flag is set, the page can be read and written into.
+    /// This flag interacts with the U/S flag and the WP flag in register CR0. See
+    /// Section 4.11, “Page-Level Protection”, and Table 4-3 for a detailed discussion
+    /// of the use of these flags.
+    read_write: bool = true,
+    /// **User/supervisor (U/S) flag, bit 2**
+    /// Specifies the user-supervisor privileges for a page or group of pages (in the
+    /// case of a page-directory entry that points to a page table). When this flag is
+    /// clear, the page is assigned the supervisor privilege level; when the flag is set,
+    /// the page is assigned the user privilege level. This flag interacts with the R/W
+    /// flag and the WP flag in register CR0. See Section 4.11, “Page-Level Protec-
+    /// tion”, and Table 4-3 for a detail discussion of the use of these flags.
+    sepervisor: bool,
+    /// **Page-level write-through (PWT) flag, bit 3**
+    /// Controls the write-through or write-back caching policy of individual pages or
+    /// page tables. When the PWT flag is set, write-through caching is enabled for the
+    /// associated page or page table; when the flag is clear, write-back caching is
+    /// enabled for the associated page or page table. The processor ignores this flag if
+    /// the CD (cache disable) flag in CR0 is set. See Section 10.5, “Cache Control”,
+    /// for more information about the use of this flag. See Section 2.5, “Control
+    /// Registers”, for a description of a companion PWT flag in control register CR3.
+    page_level_write_through: bool = false,
+    /// **Page-level cache disable (PCD) flag, bit 4**
+    /// Controls the caching of individual pages or page tables. When the PCD flag is
+    /// set, caching of the associated page or page table is prevented; when the flag is
+    /// clear, the page or page table can be cached. This flag permits caching to be
+    /// disabled for pages that contain memory-mapped I/O ports or that do not
+    /// provide a performance benefit when cached. The processor ignores this flag
+    /// (assumes it is set) if the CD (cache disable) flag in CR0 is set. See Chapter 10,
+    /// Memory Cache Control, for more information about the use of this flag. See
+    /// Section 2.5, “Control Registers”, for a description of a companion PCD flag in
+    /// control register CR3.
+    page_level_cache_disable: bool = false,
+    /// **Accessed (A) flag, bit 5**
+    /// Indicates whether a page or page table has been accessed (read from or written
+    /// to) when set. Memory management software typically clears this flag when a
+    /// page or page table is initially loaded into physical memory. The processor then
+    /// sets this flag the first time a page or page table is accessed.
+    ///
+    /// This flag is a “sticky” flag, meaning that once set, the processor does not
+    /// implicitly clear it. Only software can clear this flag. The accessed and dirty
+    /// flags are provided for use by memory management software to manage the
+    /// transfer of pages and page tables into and out of physical memory.
+    /// **NOTE:**
+    /// The accesses used by the processor to set this bit may or may not be
+    /// exposed to the processor’s Self-Modifying Code detection logic. If the
+    /// processor is executing code from the same memory area that is being used for
+    /// page table structures, the setting of the bit may or may not result in an imme-
+    /// diate change to the executing code stream.
+    accessed: bool = false,
+    /// **Dirty (D) flag, bit 6**
+    /// Indicates whether a page has been written to when set. (This flag is not used in
+    /// page-directory entries that point to page tables.) Memory management soft-
+    /// ware typically clears this flag when a page is initially loaded into physical
+    /// memory. The processor then sets this flag the first time a page is accessed for
+    /// a write operation.
+    ///
+    /// This flag is “sticky,” meaning that once set, the processor does not implicitly
+    /// clear it. Only software can clear this flag. The dirty and accessed flags are
+    /// provided for use by memory management software to manage the transfer of
+    /// pages and page tables into and out of physical memory.
+    /// **NOTE:**
+    ///  The accesses used by the processor to set this bit may or may not be
+    /// exposed to the processor’s Self-Modifying Code detection logic. If the
+    /// processor is executing code from the same memory area that is being used for
+    /// page table structures, the setting of the bit may or may not result in an imme-
+    /// diate change to the executing code stream.
+    dirty: bool = false,
+    /// **Page attribute table index (PAT) flag, bit 7 in page-table entries for 4-KByte pages and
+    /// bit 12 in page-directory entries for 4-MByte pages**
+    /// (Introduced in the Pentium III processor) — Selects PAT entry. For processors
+    /// that support the page attribute table (PAT), this flag is used along with the
+    /// PCD and PWT flags to select an entry in the PAT, which in turn selects the
+    /// memory type for the page (see Section 10.12, “Page Attribute Table (PAT)”).
+    /// For processors that do not support the PAT, this bit is reserved and should be
+    /// set to 0.
+    page_attribute_table_index: bool = false,
+    /// **Global (G) flag, bit 8**
+    /// (Introduced in the Pentium Pro processor) — Indicates a global page when set.
+    /// When a page is marked global and the page global enable (PGE) flag in register
+    /// CR4 is set, the page-table or page-directory entry for the page is not invalidated
+    /// in the TLB when register CR3 is loaded or a task switch occurs. This flag is
+    /// provided to prevent frequently used pages (such as pages that contain kernel or
+    /// other operating system or executive code) from being flushed from the TLB.
+    /// Only software can set or clear this flag. For page-directory entries that point to
+    /// page tables, this flag is ignored and the global characteristics of a page are set
+    /// in the page-table entries. See Section 3.12, “Translation Lookaside Buffers
+    /// (TLBs)”, for more information about the use of this flag. (This bit is reserved
+    /// in Pentium and earlier IA-32 processors.)
+    global: bool = false,
+
+    available_bits: u3 = 0,
+
+    /// **Page base address**, bits 12 through 32
+    /// (Page-table entries for 4-KByte pages) — Specifies the physical address of the
+    /// first byte of a 4-KByte page. The bits in this field are interpreted as the 20 most-
+    /// significant bits of the physical address, which forces pages to be aligned on
+    /// 4-KByte boundaries.
+    page_base_address: u20 = 0,
+
+    pub inline fn setPageBaseAddress(self: *PageTableEntry4K, addr: usize) void {
+        const int: usize = @bitCast(self.*);
+        self.* = @bitCast(int | addr);
+    }
+
+    pub inline fn getPageBaseAddress(self: *const PageTableEntry4K) usize {
+        return (@as(usize,@bitCast(self.*)) >> 12) << 12;
+    }
+
+    pub inline fn zero() PageTableEntry4K {
+        const z: usize = 0;
+        return @bitCast(z);
+    }
+};
+
+/// Format of Page-Directory Entries for 4-MByte Pages and 32-Bit Addresses
+pub const PageDirectoryEntry4M = packed struct(u32) {
+    /// **Present (P) flag, bit 0**
+    /// Indicates whether the page or page table being pointed to by the entry is
+    /// currently loaded in physical memory. When the flag is set, the page is in phys-
+    /// ical memory and address translation is carried out. When the flag is clear, the
+    /// page is not in memory and, if the processor attempts to access the page, it
+    /// generates a page-fault exception (#PF).
+    /// The processor does not set or clear this flag; it is up to the operating system or
+    /// executive to maintain the state of the flag.
+    /// If the processor generates a page-fault exception, the operating system gener-
+    /// ally needs to carry out the following operations:
+    /// - 1. Copy the page from disk storage into physical memory.
+    /// - 2.
+    ///  Load the page address into the page-table or page-directory entry and set
+    /// its present flag. Other flags, such as the dirty and accessed flags, may also
+    /// be set at this time.
+    /// - 3. Invalidate the current page-table entry in the TLB (see Section 3.12,
+    /// “Translation Lookaside Buffers (TLBs)”, for a discussion of TLBs and
+    /// how to invalidate them).
+    /// - 4. Return from the page-fault handler to restart the interrupted program (or
+    /// task).
+    present: bool = true,
+    /// **Read/write (R/W) flag, bit 1**
+    /// Specifies the read-write privileges for a page or group of pages (in the case of
+    /// a page-directory entry that points to a page table). When this flag is clear, the
+    /// page is read only; when the flag is set, the page can be read and written into.
+    /// This flag interacts with the U/S flag and the WP flag in register CR0. See
+    /// Section 4.11, “Page-Level Protection”, and Table 4-3 for a detailed discussion
+    /// of the use of these flags.
+    read_write: bool = true,
+    /// **User/supervisor (U/S) flag, bit 2**
+    /// Specifies the user-supervisor privileges for a page or group of pages (in the
+    /// case of a page-directory entry that points to a page table). When this flag is
+    /// clear, the page is assigned the supervisor privilege level; when the flag is set,
+    /// the page is assigned the user privilege level. This flag interacts with the R/W
+    /// flag and the WP flag in register CR0. See Section 4.11, “Page-Level Protec-
+    /// tion”, and Table 4-3 for a detail discussion of the use of these flags.
+    sepervisor: bool = true,
+    /// **Page-level write-through (PWT) flag, bit 3**
+    /// Controls the write-through or write-back caching policy of individual pages or
+    /// page tables. When the PWT flag is set, write-through caching is enabled for the
+    /// associated page or page table; when the flag is clear, write-back caching is
+    /// enabled for the associated page or page table. The processor ignores this flag if
+    /// the CD (cache disable) flag in CR0 is set. See Section 10.5, “Cache Control”,
+    /// for more information about the use of this flag. See Section 2.5, “Control
+    /// Registers”, for a description of a companion PWT flag in control register CR3.
+    page_level_write_through: bool = false,
+    /// **Page-level cache disable (PCD) flag, bit 4**
+    /// Controls the caching of individual pages or page tables. When the PCD flag is
+    /// set, caching of the associated page or page table is prevented; when the flag is
+    /// clear, the page or page table can be cached. This flag permits caching to be
+    /// disabled for pages that contain memory-mapped I/O ports or that do not
+    /// provide a performance benefit when cached. The processor ignores this flag
+    /// (assumes it is set) if the CD (cache disable) flag in CR0 is set. See Chapter 10,
+    /// Memory Cache Control, for more information about the use of this flag. See
+    /// Section 2.5, “Control Registers”, for a description of a companion PCD flag in
+    /// control register CR3.
+    page_level_cache_disable: bool = false,
+    /// **Accessed (A) flag, bit 5**
+    /// Indicates whether a page or page table has been accessed (read from or written
+    /// to) when set. Memory management software typically clears this flag when a
+    /// page or page table is initially loaded into physical memory. The processor then
+    /// sets this flag the first time a page or page table is accessed.
+    ///
+    /// This flag is a “sticky” flag, meaning that once set, the processor does not
+    /// implicitly clear it. Only software can clear this flag. The accessed and dirty
+    /// flags are provided for use by memory management software to manage the
+    /// transfer of pages and page tables into and out of physical memory.
+    /// **NOTE:**
+    /// The accesses used by the processor to set this bit may or may not be
+    /// exposed to the processor’s Self-Modifying Code detection logic. If the
+    /// processor is executing code from the same memory area that is being used for
+    /// page table structures, the setting of the bit may or may not result in an imme-
+    /// diate change to the executing code stream.
+    accsessed: bool = false,
+    /// **Dirty (D) flag, bit 6**
+    /// Indicates whether a page has been written to when set. (This flag is not used in
+    /// page-directory entries that point to page tables.) Memory management soft-
+    /// ware typically clears this flag when a page is initially loaded into physical
+    /// memory. The processor then sets this flag the first time a page is accessed for
+    /// a write operation.
+    ///
+    /// This flag is “sticky,” meaning that once set, the processor does not implicitly
+    /// clear it. Only software can clear this flag. The dirty and accessed flags are
+    /// provided for use by memory management software to manage the transfer of
+    /// pages and page tables into and out of physical memory.
+    /// **NOTE:**
+    ///  The accesses used by the processor to set this bit may or may not be
+    /// exposed to the processor’s Self-Modifying Code detection logic. If the
+    /// processor is executing code from the same memory area that is being used for
+    /// page table structures, the setting of the bit may or may not result in an imme-
+    /// diate change to the executing code stream.
+    dirty: bool = false,
+
+    /// **Page size (PS) flag, bit 7 page-directory entries for 4-KByte pages**
+    /// Determines the page size. When this flag is clear, the page size is 4 KBytes and
+    /// the page-directory entry points to a page table. When the flag is set, the page
+    /// size is 4 MBytes for normal 32-bit addressing (and 2 MBytes if extended phys-
+    /// ical addressing is enabled) and the page-directory entry points to a page. If the
+    /// page-directory entry points to a page table, all the pages associated with that
+    /// page table will be 4-KByte pages.
+    is_page: bool = true,
+
+    /// **Global (G) flag, bit 8**
+    /// (Introduced in the Pentium Pro processor) — Indicates a global page when set.
+    /// When a page is marked global and the page global enable (PGE) flag in register
+    /// CR4 is set, the page-table or page-directory entry for the page is not invalidated
+    /// in the TLB when register CR3 is loaded or a task switch occurs. This flag is
+    /// provided to prevent frequently used pages (such as pages that contain kernel or
+    /// other operating system or executive code) from being flushed from the TLB.
+    /// Only software can set or clear this flag. For page-directory entries that point to
+    /// page tables, this flag is ignored and the global characteristics of a page are set
+    /// in the page-table entries. See Section 3.12, “Translation Lookaside Buffers
+    /// (TLBs)”, for more information about the use of this flag. (This bit is reserved
+    /// in Pentium and earlier IA-32 processors.)
+    global: bool = false,
+    /// **Reserved and available-to-software bits**
+    /// For all IA-32 processors. Bits 9, 10, and 11 are available for use by software.
+    /// (When the present bit is clear, bits 1 through 31 are available to software, see
+    /// Figure 3-16.) In a page-directory entry that points to a page table, bit 6 is
+    /// reserved and should be set to 0. When the PSE and PAE flags in control register
+    /// CR4 are set, the processor generates a page fault if reserved bits are not set to 0.
+    /// For Pentium II and earlier processors. Bit 7 in a page-table entry is reserved and
+    /// should be set to 0. For a page-directory entry for a 4-MByte page, bits 12
+    /// through 21 are reserved and must be set to 0.
+    /// For Pentium III and later processors. For a page-directory entry for a 4-MByte
+    /// page, bits 13 through 21 are reserved and must be set to 0.
+    available_bits: u3 = 0,
+    /// **Page attribute table index (PAT) flag, bit 7 in page-table entries for 4-KByte pages and
+    /// bit 12 in page-directory entries for 4-MByte pages**
+    /// (Introduced in the Pentium III processor) — Selects PAT entry. For processors
+    /// that support the page attribute table (PAT), this flag is used along with the
+    /// PCD and PWT flags to select an entry in the PAT, which in turn selects the
+    /// memory type for the page (see Section 10.12, “Page Attribute Table (PAT)”).
+    /// For processors that do not support the PAT, this bit is reserved and should be
+    /// set to 0.
+    page_attribute_table_index: bool = false,
+
+    reserved: u9 = 0,
+    /// **(Page-directory entries for 4-MByte pages)** — Specifies the physical address
+    /// of the first byte of a 4-MByte page. Only bits 22 through 31 of this field are
+    /// used (and bits 12 through 21 are reserved and must be set to 0, for IA-32
+    /// processors through the Pentium II processor). The base address bits are inter-
+    /// preted as the 10 most-significant bits of the physical address, which forces
+    /// 4-MByte pages to be aligned on 4-MByte boundaries.
+    page_base_address: u10 = 0,
+
+    pub inline fn setPageBaseAddress(self: *PageDirectoryEntry4M, addr: usize) void {
+        const int: usize = @bitCast(self.*);
+        self.* = @bitCast(int | addr);
+    }
+
+    pub inline fn getPageBaseAddress(self: *const PageDirectoryEntry4M) usize {
+        return (@as(usize,@bitCast(self.*)) >> 22) << 22;
+    }
+
+    pub inline fn zero() PageDirectoryEntry4M {
+        const z: usize = 0;
+        return @bitCast(z);
+    }
+};
+
+pub const PageDirectoryEntry = packed union {
+    @"4K": PageDirectoryEntry4K align(4096),
+    @"4M": PageDirectoryEntry4M align(4096),
+
+    pub fn zero() PageDirectoryEntry {
+        const z: usize = 0;
+        return PageDirectoryEntry{.@"4K" = @bitCast(z)};
+    }
+};
+
+pub const PageDirectory = [1024]PageDirectoryEntry;
+
+pub const PageTable = [1024]PageTableEntry4K;
+
+/// Setting the PE flag in register CR0 causes the processor to switch to protected mode, which in
+/// turn enables the segment-protection mechanism. Once in protected mode, there is no control bit
+/// for turning the protection mechanism on or off. The part of the segment-protection mechanism
+/// that is based on privilege levels can essentially be disabled while still in protected mode by
+/// assigning a privilege level of 0 (most privileged) to all segment selectors and segment descrip-
+/// tors. This action disables the privilege level protection barriers between segments, but other
+/// protection checks such as limit checking and type checking are still carried out.
+pub inline fn enableProtection() void {
+    var cr0 = Cr0.read();
+    cr0.protection = true;
+    cr0.write();
+}
+
+/// This action makes each page a writable, user page, which in effect disables page-level
+/// protection.
+pub fn disableProtection(page_directory: *PageDirectory) void {
+    var cr0 = Cr0.read();
+    cr0.write_protect = false;
+    cr0.write();
+
+    for (&page_directory.*) |*value| {
+        if (value.@"4K".is_page) {
+            const page_table_address: *PageTable = @ptrFromInt(@as(u32, @intCast(value.@"4K".page_table_base_address)));
+            for (&page_table_address.*) |*pte| {
+                pte.read_write = true;
+            }
+        }
+        value.@"4K".read_write = true;
+    }
+}
+
+pub inline fn getCurrentPrevilegeLevel() u2 {
+    return @truncate(asm ("mov %%cs, %[a]"
+        : [a] "={eax}" (-> u32),
+    ));
+}
+
+/// A segment selector is a 16-bit identifier for a segment (see Figure 3-6). It does not point directly
+/// to the segment, but instead points to the segment descriptor that defines the segment. A segment
+/// selector contains the following items:
+pub const SegmentSelector = packed struct(u16) {
+    pub const TableIndicator = enum(u1) { gdt = 0, ldt = 1 };
+
+    /// **Requested Privilege Level (RPL)**
+    /// (Bits 0 and 1) — Specifies the privilege level of the selector. The privilege level
+    /// can range from 0 to 3, with 0 being the most privileged level. See Section 4.5,
+    /// “Privilege Levels”, for a description of the relationship of the RPL to the CPL
+    /// of the executing program (or task) and the descriptor privilege level (DPL) of
+    /// the descriptor the segment selector points to.
+    requested_privilege_level: u2,
+    /// **TI (table indicator) flag**
+    /// (Bit 2) — Specifies the descriptor table to use: clearing this flag selects the
+    /// GDT; setting this flag selects the current LDT.
+    table_indicator: TableIndicator,
+    /// **Index**
+    /// (Bits 3 through 15) — Selects one of 8192 descriptors in the GDT or LDT. The
+    /// processor multiplies the index value by 8 (the number of bytes in a segment
+    /// descriptor) and adds the result to the base address of the GDT or LDT (from
+    /// the GDTR or LDTR register, respectively).
+    index: u13,
+};
+
+const std = @import("std");
+
+// simulate a long jump
+pub inline fn setCodeSegment(comptime segment_selector: SegmentSelector) void {
+    asm volatile (std.fmt.comptimePrint("jmp ${}, $1f\n 1:\n", .{@as(u16, @bitCast(segment_selector))}));
+}
+
+pub const Exception = struct {
+    pub const Kind = enum {
+        /// A fault is an exception that can generally be corrected and that, once corrected,
+        /// allows the program to be restarted with no loss of continuity. When a fault is reported, the
+        /// processor restores the machine state to the state prior to the beginning of execution of the
+        /// faulting instruction. The return address (saved contents of the CS and EIP registers) for the
+        /// fault handler points to the faulting instruction, rather than to the instruction following the
+        /// faulting instruction.
+        fault,
+        /// A trap is an exception that is reported immediately following the execution of the
+        /// trapping instruction. Traps allow execution of a program or task to be continued without
+        /// loss of program continuity. The return address for the trap handler points to the instruction
+        /// to be executed after the trapping instruction.
+        trap,
+        interrupt,
+        fault_trap,
+        /// An abort is an exception that does not always report the precise location of the
+        /// instruction causing the exception and does not allow a restart of the program or task that
+        /// caused the exception. Aborts are used to report severe errors, such as hardware errors and
+        /// inconsistent or illegal values in system tables.
+        abort,
+        reserved,
+    };
+
+    id: u8 = 0,
+    mnemonic: []const u8 = "",
+    description: []const u8 = "",
+    kind: Kind = .abort,
+    errcode: bool = false,
+    source: []const u8 = "",
+};
+
+pub const exceptions: []const Exception = &.{
+    // 0
+    Exception{ .id = 0, .mnemonic = "#DE", .description = "Divide Error", .kind = .fault, .errcode = false, .source = "DIV and IDIV instructions" },
+    // 1
+    Exception{ .id = 1, .mnemonic = "#DB", .description = "RESERVED", .kind = .fault_trap, .errcode = false, .source = "For Intel use only" },
+    // 2
+    Exception{ .id = 2, .mnemonic = "__", .description = "NMI Interrupt", .kind = .interrupt, .errcode = false, .source = "Nonmaskable external interrupt." },
+    // 3
+    Exception{ .id = 3, .mnemonic = "#BP", .description = "Breakpoint", .kind = .trap, .errcode = false, .source = "INT 3 instruction." },
+    // 4
+    Exception{ .id = 4, .mnemonic = "#OF", .description = "Overflow", .kind = .trap, .errcode = false, .source = "INTO Instruction" },
+    // 5
+    Exception{ .id = 5, .mnemonic = "#BR", .description = "Bound Range Exceeded", .kind = .fault, .errcode = false, .source = "BOUND instruction" },
+    // 6
+    Exception{ .id = 6, .mnemonic = "#UD", .description = "Invalid Opcode", .kind = .fault, .errcode = false, .source = "UD2 instruction or reserved opcode" },
+    // 7
+    Exception{ .id = 7, .mnemonic = "#NM", .description = "Device Not Available (NoMath Coprocessor)", .kind = .fault, .errcode = false, .source = "Floating-point or WAIT/FWAIT Instruction" },
+    // 8
+    Exception{ .id = 8, .mnemonic = "#DF", .description = "Double Fault", .kind = .fault, .errcode = true, .source = "Any instruction that can generate an exception, an NMI, or anINTR." },
+    // 9
+    Exception{ .id = 9, .mnemonic = "  ", .description = "Coprocessor Segment Overrun (reserved)", .kind = .fault, .errcode = false, .source = "Floating point instruction" },
+    // 10
+    Exception{ .id = 10, .mnemonic = "#TS", .description = "Invalid TSS", .kind = .fault, .errcode = true, .source = "Task switch or TSS access" },
+    // 11
+    Exception{ .id = 11, .mnemonic = "#NP", .description = "Segment Not Present", .kind = .fault, .errcode = true, .source = "Loading segment registers or accessing system segments." },
+    // 12
+    Exception{ .id = 12, .mnemonic = "#SS", .description = "Stack-Segment Fault", .kind = .fault, .errcode = true, .source = "Stack operations and SS register loads." },
+    // 13
+    Exception{ .id = 13, .mnemonic = "#GP", .description = "General Protection", .kind = .fault, .errcode = true, .source = " Any memory reference and other protection checks." },
+    // 14
+    Exception{ .id = 14, .mnemonic = "#PF", .description = "Page Fault", .kind = .fault, .errcode = true, .source = "Any memory reference." },
+    // 15
+    Exception{ .id = 15, .mnemonic = "__", .description = "(Intel reserved. Do not use.)", .kind = .reserved, .errcode = false, .source = "" },
+    // 16
+    Exception{ .id = 16, .mnemonic = "#MF", .description = " x87 FPU Floating-Point Error (Math Fault)", .kind = .fault, .errcode = false, .source = "x87 FPU floating-point or WAIT/FWAIT instruction." },
+    // 17
+
+    Exception{ .id = 17, .mnemonic = "#AC", .description = "Alignment Check", .kind = .fault, .errcode = true, .source = "Any data reference in memory." },
+    // 18
+    Exception{ .id = 18, .mnemonic = "#MC", .description = "Machine Check", .kind = .abort, .errcode = false, .source = "Error codes (if any) and source are model dependent." },
+    // 19
+    Exception{ .id = 19, .mnemonic = "#XF", .description = "SIMD Floating-Point Exception", .kind = .fault, .errcode = false, .source = "SSE/SSE2/SSE3 floating-point instructions5" },
+    // 20
+    Exception{ .id = 20, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+    Exception{ .id = 21, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+    Exception{ .id = 22, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+    Exception{ .id = 23, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+    Exception{ .id = 24, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+    Exception{ .id = 25, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+    Exception{ .id = 26, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+    Exception{ .id = 27, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+    Exception{ .id = 28, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+    Exception{ .id = 29, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+    Exception{ .id = 30, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+    Exception{ .id = 31, .mnemonic = "", .description = "Intel reserved. Do not use.", .kind = .reserved, .errcode = false, .source = "" },
+};
+
+pub inline fn enableInterrupts() void {
+    asm volatile ("sti");
+}
+
+pub inline fn disableinterrupts() void {
+    asm volatile ("cli");
+}
+
+/// A task-gate descriptor provides an indirect, protected reference to a task (see Figure 6-6). It can
+/// be placed in the GDT, an LDT, or the IDT. The TSS segment selector field in a task-gate
+/// descriptor points to a TSS descriptor in the GDT. The RPL in this segment selector is not used.
+///
+/// The DPL of a task-gate descriptor controls access to the TSS descriptor during a task switch.
+/// When a program or procedure makes a call or jump to a task through a task gate, the CPL and
+/// the RPL field of the gate selector pointing to the task gate must be less than or equal to the DPL
+/// of the task-gate descriptor. Note that when a task gate is used, the DPL of the destination TSS
+/// descriptor is not used.
+pub const TaskGate = packed struct(u64) {
+    reserved0: u16 = 0,
+    tss_segment_selector: SegmentSelector,
+    reserved1: u8 = 0,
+    t: u3 = 0b101,
+    size: u1 = 0,
+    zerobit: u1 = 0,
+    /// Descriptor Privilege Level
+    dpl: u2,
+    present: bool,
+    reserved4: u16 = 0,
+
+    pub fn init(tss_segment_selector: SegmentSelector, previlege: u2, present: bool) TaskGate {
+        return .{ .tss_segment_selector = tss_segment_selector, .dpl = previlege, .present = present };
+    }
+};
+
+pub const GateSize = enum(u1) { @"16" = 0, @"32" = 1 };
+
+/// Interrupt and trap gates are very similar to call gates (see Section 4.8.3, “Call Gates”). They
+/// contain a far pointer (segment selector and offset) that the processor uses to transfer program
+/// execution to a handler procedure in an exception- or interrupt-handler code segment. These gates
+/// differ in the way the processor handles the IF flag in the EFLAGS register (see Section 5.12.1.2,
+/// “Flag Usage By Exception- or Interrupt-Handler Procedure”).
+pub const InterruptGate = packed struct(u64) {
+    /// Offset to procedure entry point
+    offset_low: u16,
+    /// Segment Selector for destination code segment
+    ///  The segment selector for the gate
+    /// points to a segment descriptor for an executable code segment in either the GDT or the current
+    /// LDT
+    segment_selector: SegmentSelector,
+    reserved0: u5 = 0,
+    b0: u3 = 0,
+    b1: u3 = 0b110,
+    size: GateSize,
+    b2: u1 = 0,
+    dpl: u2,
+    present: bool,
+    offset_high: u16,
+
+    pub fn init(
+        proc_entry_point: *const fn () callconv(.Naked) void,
+        segment_selector: SegmentSelector,
+        previlege: u2,
+        size: GateSize,
+        present: bool,
+    ) InterruptGate {
+        const proc: u32 = @intFromPtr(proc_entry_point);
+        return InterruptGate{ .offset_low = @truncate(proc), .segment_selector = segment_selector, .dpl = previlege, .offset_high = @truncate(proc >> 16), .size = size, .present = present };
+    }
+
+    pub inline fn getOffset(self: *const InterruptGate) u32 {
+        return @as(u32, @intCast(self.offset_high)) << 16 | self.offset_low;
+    }
+
+    pub inline fn setOffset(self: *InterruptGate, value: u32) void {
+        self.offset_high = @truncate(value >> 16);
+        self.offset_low = @truncate(value);
+    }
+};
+
+/// Interrupt and trap gates are very similar to call gates (see Section 4.8.3, “Call Gates”). They
+/// contain a far pointer (segment selector and offset) that the processor uses to transfer program
+/// execution to a handler procedure in an exception- or interrupt-handler code segment. These gates
+/// differ in the way the processor handles the IF flag in the EFLAGS register (see Section 5.12.1.2,
+/// “Flag Usage By Exception- or Interrupt-Handler Procedure”).
+pub const TrapGate = packed struct(u64) {
+    /// Offset to procedure entry point
+    offset_low: u16,
+    /// Segment Selector for destination code segment
+    ///  The segment selector for the gate
+    /// points to a segment descriptor for an executable code segment in either the GDT or the current
+    /// LDT
+    segment_selector: SegmentSelector,
+    reserved0: u5 = 0,
+    b0: u3 = 0,
+    b1: u3 = 0b111,
+    size: GateSize,
+    b2: u1 = 0,
+    dpl: u2,
+    present: bool,
+    offset_high: u16,
+
+    pub fn init(
+        proc_entry_point: *const fn () callconv(.Naked) void,
+        segment_selector: SegmentSelector,
+        previlege: u2,
+        size: GateSize,
+        present: bool,
+    ) TrapGate {
+        const proc: u32 = @intFromPtr(proc_entry_point);
+        return TrapGate{ .offset_low = @truncate(proc), .segment_selector = segment_selector, .dpl = previlege, .offset_high = @truncate(proc >> 16), .size = size, .present = present };
+    }
+
+    pub inline fn getOffset(self: *const TrapGate) u32 {
+        return @as(u32, @intCast(self.offset_high)) << 16 | self.offset_low;
+    }
+
+    pub inline fn setOffset(self: *TrapGate, value: u32) void {
+        self.offset_high = @truncate(value >> 16);
+        self.offset_low = @truncate(value);
+    }
+};
+
+pub const IDTEntry = packed union { task: TaskGate, interrupt: InterruptGate, trap: TrapGate };
+
+/// When an exception condition is related to a specific segment, the processor pushes an error code
+/// onto the stack of the exception handler (whether it is a procedure or task). The error code has
+/// the format shown in Figure 5-6. The error code resembles a segment selector; however, instead
+/// of a TI flag and RPL field, the error code contains 3 flags:
+pub const ErrorCode = packed struct(u32) {
+    pub const DescriptorLocation = enum(u1) { gdt_idt = 0, idt = 1 };
+
+    pub const TableIndexed = enum(u1) { gdt = 0, ldt = 1 };
+    /// **EXT - External event (bit 0)** — When set, indicates that an event external to the
+    /// program, such as a hardware interrupt, caused the exception.
+    external_event: bool,
+    /// **IDT - Descriptor location (bit 1)** — When set, indicates that the index portion of the
+    /// error code refers to a gate descriptor in the IDT; when clear, indicates that the
+    /// index refers to a descriptor in the GDT or the current LDT.
+    descriptor_location: DescriptorLocation,
+    /// **TI - GDT/LDT (bit 2)** — Only used when the IDT flag is clear. When set, the TI
+    /// flag indicates that the index portion of the error code refers to a segment or gate
+    /// descriptor in the LDT; when clear, it indicates that the index refers to a
+    /// descriptor in the current GDT.
+    table_indexed: TableIndexed,
+
+    index: u13,
+    reserved: u16,
+};
+
+pub const PageFaultErrorCode = packed struct(u32) {
+    /// The P flag indicates whether the exception was due to a not-present page (0) or to
+    /// either an access rights violation or the use of a reserved bit (1).
+    p: bool,
+    /// The W/R flag indicates whether the memory access that caused the exception was a
+    /// read (0) or write (1).
+    caused_by_write: bool,
+    /// The U/S flag indicates whether the processor was executing at user mode (1) or
+    /// supervisor mode (0) at the time of the exception.
+    from_user_mode: bool,
+    /// The RSVD flag indicates that the processor detected 1s in reserved bits of the page
+    /// directory, when the PSE or PAE flags in control register CR4 are set to 1. (The PSE
+    /// flag is only available in the Pentium 4, Intel Xeon, P6 family, and Pentium processors,
+    /// and the PAE flag is only available on the Pentium 4, Intel Xeon, and P6 family
+    /// processors. In earlier IA-32 processor, the bit position of the RSVD flag is reserved.)
+    rsvd: bool,
+    /// The I/D flag indicates whether the exception was caused by an instruction fetch. This
+    /// flag is reserved if the processor does not support execute-disable bit or execute disable
+    /// bit feature is not enabled (see Section 3.10).
+    by_instruction_fetch: bool,
+
+    resrved: u27,
+};
+
+pub fn cpuContext(comptime interrupt: Exception) type {
+    return struct {
+        pub const PushedSelector = packed struct(u32) {
+            selector: SegmentSelector,
+            _: u16 = 0,
+        };
+        // Page directory
+        cr3: Cr3 = .{},
+
+        // Extra segments
+        gs: PushedSelector,
+        fs: PushedSelector,
+        es: PushedSelector,
+        ds: PushedSelector,
+
+
+        // Destination, source, base pointer
+        edi: u32,
+        esi: u32,
+        ebp: u32,
+        esp: u32,
+
+        // General registers
+        ebx: u32,
+        edx: u32,
+        ecx: u32,
+        eax: u32,
+
+        // Interrupt number and error code
+        interrupt_number: u32,
+
+        // defined
+        error_code: if (std.mem.eql(u8, "#PF", interrupt.mnemonic)) PageFaultErrorCode else ErrorCode,
+        eip: u32,
+        cs: PushedSelector,
+        //cs_high: u16,
+        eflags: Eflags,
+        // if privilege changes
+        user_esp: u32 = 0,
+        user_ss: PushedSelector,
+    };
+}
+
+pub fn interruptProcedure(interrupt: Exception, handler_name: []const u8) fn () callconv(.Naked) void {
+    //_ = interrupt;
+    //_ = handler_name;
+
+    return struct {
+        pub fn func() callconv(.Naked) void {
+            if (!interrupt.errcode) {
+                asm volatile ("pushl $0");
+            }
+
+            asm volatile (std.fmt.comptimePrint("pushl ${}\n", .{interrupt.id}));
+
+            asm volatile (
+                \\pusha
+                \\push  %%ds
+                \\push  %%es
+                \\push  %%fs
+                \\push  %%gs
+                \\mov %%cr3, %%eax
+                \\push %%eax
+                \\mov   $0x10, %%ax
+                \\mov   %%ax, %%ds
+                \\mov   %%ax, %%es
+                \\mov   %%ax, %%fs
+                \\mov   %%ax, %%gs
+                \\mov   %%esp, %%eax
+                \\push  %%eax
+                //\\call  handler
+            );
+
+            asm volatile (std.fmt.comptimePrint("call {s}\n", .{handler_name}));
+
+            // Pop off the new cr3 then check if it's the same as the previous cr3
+            // If so don't change cr3 to avoid a TLB flush
+            asm volatile (
+                \\mov   %%eax, %%esp
+                \\pop   %%eax
+                \\mov   %%cr3, %%ebx
+                \\cmp   %%eax, %%ebx
+                \\je    1f
+                \\mov   %%eax, %%cr3
+                \\1:
+                \\pop   %%gs
+                \\pop   %%fs
+                \\pop   %%es
+                \\pop   %%ds
+                \\popa
+            );
+            // The Tss.esp0 value is the stack pointer used when an interrupt occurs. This should be the current process' stack pointer
+            // So skip the rest of the CpuState, set Tss.esp0 then un-skip the last few fields of the CpuState
+
+            // asm volatile (
+            //     \\add   $0x1C, %%esp
+            //     \\.extern main_tss_entry
+            //     \\mov   %%esp, (main_tss_entry + 4)
+            //     \\sub   $0x14, %%esp
+            //     \\iret
+            // );
+
+            asm volatile (
+                \\add   $0x8, %%esp
+                \\iret
+            );
+        }
+    }.func;
+}
+
+pub const interruptHandler =
+    *const fn (context: *cpuContext(.{})) *cpuContext(.{});
+
+/// The processor state information needed to restore a task is saved in a system segment called the
+/// task-state segment (TSS).
+pub const TaskStateSegment = extern struct {
+    /// Previous task link field — Contains the segment selector for the TSS of the previous task
+    /// (updated on a task switch that was initiated by a call, interrupt, or exception). This field
+    /// (which is sometimes called the back link field) permits a task switch back to the previous
+    /// task by using the IRET instruction.
+    previous_task_link: u16,
+    reserved0: u16 = 0,
+
+    /// **Privilege level 0,stack pointer** — This stack pointer consist of a
+    /// logical address made up of the segment selector for the stack segment (SS0)
+    /// and an offset into the stack (ESP0). Note that the values in this field
+    /// is static for a particular task; whereas, the SS and ESP values will change if stack
+    /// switching occurs within the task.
+    esp0: u32,
+    ss0: SegmentSelector,
+    reserved1: u16 = 0,
+    /// **Privilege level 1,stack pointer** — This stack pointer consist of a
+    /// logical address made up of the segment selector for the stack segment (SS1)
+    /// and an offset into the stack (ESP1). Note that the values in this field
+    /// is static for a particular task; whereas, the SS and ESP values will change if stack
+    /// switching occurs within the task.
+    esp1: u32,
+    ss1: SegmentSelector,
+    reserved2: u16 = 0,
+    /// **Privilege level 2,stack pointer** — This stack pointer consist of a
+    /// logical address made up of the segment selector for the stack segment (SS2)
+    /// and an offset into the stack (ESP2). Note that the values in this field
+    /// is static for a particular task; whereas, the SS and ESP values will change if stack
+    /// switching occurs within the task.
+    esp2: u32,
+    ss2: SegmentSelector,
+    reserved3: u16 = 0,
+
+    /// **CR3 control register field** — Contains the base physical address of the page directory to
+    /// be used by the task. Control register CR3 is also known as the page-directory base register
+    /// (PDBR).
+    cr3: Cr3,
+    /// EIP (instruction pointer) field — State of the EIP register prior to the task switch.
+    eip: u32,
+    /// EFLAGS register field — State of the EFAGS register prior to the task switch.
+    eflags: Eflags,
+
+    //General-purpose register fields — State of the EAX, ECX, EDX, EBX, ESP, EBP, ESI,
+    //and EDI registers prior to the task switch.
+    eax: u32,
+    ecx: u32,
+    edx: u32,
+    ebx: u32,
+    esp: u32,
+    ebp: u32,
+    esi: u32,
+    edi: u32,
+
+    //Segment selector fields — Segment selectors stored in the ES, CS, SS, DS, FS, and GS
+    //registers prior to the task switch.
+    es: SegmentSelector,
+    reserved4: u16,
+
+    cs: SegmentSelector,
+    reserved5: u16,
+
+    ss: SegmentSelector,
+    reserved6: u16,
+
+    ds: SegmentSelector,
+    reserved7: u16,
+
+    fs: SegmentSelector,
+    reserved8: u16,
+
+    gs: SegmentSelector,
+    reserved9: u16,
+    /// LDT segment selector field — Contains the segment selector for the task's LDT.
+    ldt_segment_selector: SegmentSelector,
+    reserved10: u16,
+    /// **T (debug trap) flag (byte 100, bit 0)** — When set, the T flag causes the processor to raise
+    /// a debug exception when a task switch to this task occurs (see Section 15.3.1.5, “Task-
+    /// Switch Exception Condition”).
+    //T: bool = false,
+    reserved11: u16 = 0,
+    /// **I/O map base address field** — Contains a 16-bit offset from the base of the TSS to the I/O
+    /// permission bit map and interrupt redirection bitmap. When present, these maps are stored
+    /// in the TSS at higher addresses. The I/O map base address points to the beginning of the I/O
+    /// permission bit map and the end of the interrupt redirection bit map. See Chapter 13,
+    /// Input/Output, in the IA-32 Intel Architecture Software Developer’s Manual, Volume 1,
+    /// for more information about the I/O permission bit map. See Section 16.3, “Interrupt and
+    /// Exception Handling in Virtual-8086 Mode”, for a detailed description of the interrupt
+    /// redirection bit map.
+    io_map_base_address: u16 = 0,
+};
+
+/// The TSS, like all other segments, is defined by a segment descriptor. Figure 6-3 shows the
+/// format of a TSS descriptor. TSS descriptors may only be placed in the GDT; they cannot be
+/// placed in an LDT or the IDT.
+/// An attempt to access a TSS using a segment selector with its TI flag set (which indicates the
+/// current LDT) causes a general-protection exception (#GP) to be generated during CALLs and
+/// JMPs; it causes an invalid TSS exception (#TS) during IRETs. A general-protection exception
+/// is also generated if an attempt is made to load a segment selector for a TSS into a segment
+/// register.
+/// The busy flag (B) in the type field indicates whether the task is busy. A busy task is currently
+/// running or suspended. A type field with a value of 1001B indicates an inactive task; a value of
+/// 1011B indicates a busy task. Tasks are not recursive. The processor uses the busy flag to detect
+/// an attempt to call a task whose execution has been interrupted. To insure that there is only one
+/// busy flag is associated with a task, each TSS should have only one TSS descriptor that points to
+/// it.
+/// The base, limit, and DPL fields and the granularity and present flags have functions similar to
+/// their use in data-segment descriptors (see Section 3.4.5, “Segment Descriptors”). When the
+/// G flag is 0 in a TSS descriptor for a 32-bit TSS, the limit field must have a value equal to or
+/// greater than 67H, one byte less than the minimum size of a TSS. Attempting to switch to a task
+/// whose TSS descriptor has a limit less than 67H generates an invalid-TSS exception (#TS). A
+/// larger limit is required if an I/O permission bit map is included or if the operating system stores
+/// additional data. The processor does not check for a limit greater than 67H on a task switch;
+/// however, it does check when accessing the I/O permission bit map or interrupt redirection bit
+/// map.
+/// Any program or procedure with access to a TSS descriptor (that is, whose CPL is numerically
+/// equal to or less than the DPL of the TSS descriptor) can dispatch the task with a call or a jump.
+/// In most systems, the DPLs of TSS descriptors are set to values less than 3, so that only privileged
+/// software can perform task switching. However, in multitasking applications, DPLs for some
+/// TSS descriptors may be set to 3 to allow task switching at the application (or user) privilege
+/// level.
+pub fn TSSDescriptor(base: *anyopaque) SegmentDescriptor {
+    //SegmentDescriptor.Flags{.}
+    const limit = @sizeOf(TaskStateSegment) - 1;
+    //67;
+    return SegmentDescriptor.init(@intFromPtr(base), limit, .{ 
+        .system = SegmentDescriptor.SystemType.tss32Available() }, .{
+            .granularity = false,
+            .limit_high = 0,
+            .privilege_level = 3,
+            .descriptor_type = false
+            //.db = 0
+        });
+}
+
+pub inline fn spinloop() void {
+    while (true) haltProcessor();
+}

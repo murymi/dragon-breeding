@@ -12,12 +12,12 @@ const vga = @import("vga.zig");
 const AccessBits = packed struct {
     /// Whether the segment has been access. This shouldn't be set as it is set by the CPU when the
     /// segment is accessed.
-    accessed: u1,
+    accessed: u1 = 0,
 
     /// For code segments, when set allows the code segment to be readable. Code segments are
     /// always executable. For data segments, when set allows the data segment to be writeable.
     /// Data segments are always readable.
-    read_write: u1,
+    read_write: u1 = 0,
 
     /// For code segments, when set allows this code segments to be executed from a equal or lower
     /// privilege level. The privilege bits represent the highest privilege level that is allowed
@@ -25,40 +25,40 @@ const AccessBits = packed struct {
     /// same ring level specified in the privilege level bits. For data segments, when set the data
     /// segment grows downwards. When not set, the data segment grows upwards. So for both code and
     /// data segments, this shouldn't be set.
-    direction_conforming: u1,
+    direction_conforming: u1 = 0,
 
     /// When set, the segment can be executed, a code segments. When not set, the segment can't be
     /// executed, data segment.
-    executable: u1,
+    executable: u1 = 0,
 
     /// Should be set for code and data segments, but not set for TSS.
-    descriptor: u1,
+    descriptor: u1 = 0,
 
     /// Privilege/ring level. The kernel level is level 3, the highest privilege. The user level is
     /// level 0, the lowest privilege.
-    privilege: u2,
+    privilege: u2 = 0,
 
     /// Whether the segment is present. This must be set for all valid selectors, not the null
     /// segment.
-    present: u1,
+    present: u1 = 0,
 };
 
 /// The flag bits for a GDT entry.
 const FlagBits = packed struct {
     /// The lowest bits must be 0 as this is reserved for future use.
-    reserved_zero: u1,
+    reserved_zero: u1 = 0,
 
     /// When set indicates the segment is a x86-64 segment. If set, then the IS_32_BIT flag must
     /// not be set. If both are set, then will throw an exception.
-    is_64_bit: u1,
+    is_64_bit: u1 = 0,
 
     /// When set indicates the segment is a 32 bit protected mode segment. When not set, indicates
     /// the segment is a 16 bit protected mode segment.
-    is_32_bit: u1,
+    is_32_bit: u1 = 0,
 
     /// The granularity bit. When set the limit is in 4KB blocks (page granularity). When not set,
     /// then limit is in 1B blocks (byte granularity). This should be set as we are doing paging.
-    granularity: u1,
+    granularity: u1 = 0,
 };
 
 /// The structure that contains all the information that each GDT entry needs.
@@ -83,7 +83,7 @@ const GdtEntry = packed struct {
 };
 
 /// The TSS entry structure
-const Tss = packed struct {
+pub const Tss = packed struct {
     /// Pointer to the previous TSS entry
     prev_tss: u16,
     reserved1: u16,
@@ -325,48 +325,51 @@ pub const USER_DATA_OFFSET: u16 = 0x20;
 pub const TSS_OFFSET: u16 = 0x28;
 
 /// The GDT entry table of NUMBER_OF_ENTRIES entries.
-var gdt_entries: [NUMBER_OF_ENTRIES]GdtEntry = undefined;
+var gdt_entries: [NUMBER_OF_ENTRIES]sys.SegmentDescriptor = undefined;
+
+const sys = @import("sys/registers.zig");
+
 
 fn initDdtEntries() void {
     //var gdt_entries_temp: [NUMBER_OF_ENTRIES]GdtEntry = undefined;
 
     // Null descriptor
-    gdt_entries[0] = makeGdtEntry(0, 0, NULL_SEGMENT, NULL_FLAGS);
+    gdt_entries[0] = sys.SegmentDescriptor.zero();
+    //makeGdtEntry(0, 0, NULL_SEGMENT, NULL_FLAGS);
 
-    // Kernel code descriptor
-    gdt_entries[1] = makeGdtEntry(0, 0xFFFFF, KERNEL_SEGMENT_CODE, PAGING_32_BIT);
+    //const max =
+    //0xfffff;
 
-    // Kernel data descriptor
-    gdt_entries[2] = makeGdtEntry(0, 0xFFFFF, KERNEL_SEGMENT_DATA, PAGING_32_BIT);
+    gdt_entries[0] = sys.SegmentDescriptor.zero();
+    const limit = std.math.maxInt(u20);
+    gdt_entries[1] = sys.SegmentDescriptor.init(0, limit, .{.code = .{}}, .{.privilege_level = 0});
+    //sys.SegmentDescriptor{ .descriptor_type = .{ .code = .{} }, .flags = .{privilege_level = 0,} };
+    gdt_entries[2] = sys.SegmentDescriptor.init(0, limit, .{.data = .{}}, .{.privilege_level = 0});
 
-    // User code descriptor
-    gdt_entries[3] = makeGdtEntry(0, 0xFFFFF, USER_SEGMENT_CODE, PAGING_32_BIT);
+    gdt_entries[3] = sys.SegmentDescriptor.init(0, limit, .{.code = .{}}, .{.privilege_level = 3});
+    gdt_entries[4] = sys.SegmentDescriptor.init(0, limit, .{.data = .{}}, .{.privilege_level = 3});
 
-    // User data descriptor
-    gdt_entries[4] = makeGdtEntry(0, 0xFFFFF, USER_SEGMENT_DATA, PAGING_32_BIT);
-
-    // TSS descriptor, one each for each processor
-    // Will initialise the TSS at runtime
-    //gdt_entries[5] = makeGdtEntry(0, 0, NULL_SEGMENT, NULL_FLAGS);
+    //std.math.maxInt(u20);
    
-   gdt_entries[TSS_INDEX] = makeGdtEntry(@intFromPtr(&main_tss_entry), @sizeOf(Tss) - 1, TSS_SEGMENT, NULL_FLAGS);
+   gdt_entries[TSS_INDEX] = sys.TSSDescriptor(&main_tss_entry);
 
 }
 
 /// The GDT pointer that the CPU is loaded with that contains the base address of the GDT and the
 /// size.
-var gdt_ptr = GdtPtr{
+var gdt_ptr = sys.PseudoDescriptor{
     .limit = TABLE_SIZE,
     .base = undefined,
 };
 
 /// The main task state segment entry.
-pub var main_tss_entry: Tss = init: {
-    var tss_temp = std.mem.zeroes(Tss);
-    tss_temp.ss0 = KERNEL_DATA_OFFSET;
-    tss_temp.io_permissions_base_offset = @sizeOf(Tss);
-    break :init tss_temp;
-};
+pub var main_tss_entry: sys.TaskStateSegment = std.mem.zeroes(sys.TaskStateSegment);
+// init: {
+//     var tss_temp = std.mem.zeroes(sys.TaskStateSegment);
+//     tss_temp.ss0 = @bitCast(KERNEL_DATA_OFFSET);
+//     //tss_temp.io_permissions_base_offset = @sizeOf(Tss);
+//     break :init tss_temp;
+// };
 
 ///
 /// Make a GDT entry.
@@ -381,7 +384,7 @@ pub var main_tss_entry: Tss = init: {
 ///     A new GDT entry with the give access and flag bits set with the base at 0x00000000 and
 ///     limit at 0xFFFFF.
 ///
-fn makeGdtEntry(base: u32, limit: u20, access: AccessBits, flags: FlagBits) GdtEntry {
+pub fn makeGdtEntry(base: u32, limit: u20, access: AccessBits, flags: FlagBits) GdtEntry {
     return .{
         .limit_low = @truncate(limit),
         .base_low = @truncate(base),
@@ -405,6 +408,9 @@ fn makeGdtEntry(base: u32, limit: u20, access: AccessBits, flags: FlagBits) GdtE
     };
 }
 
+pub var kernel_stack: [16384]u8 align(16) = undefined;
+const stack_top = kernel_stack[kernel_stack.len..].ptr;
+
 ///
 /// Initialise the Global Descriptor table.
 ///
@@ -419,12 +425,29 @@ pub fn init() void {
     gdt_ptr.base = @intFromPtr(&gdt_entries[0]);
 
     // Load the GDT
-    lgdt(&gdt_ptr);
+    lgdt(gdt_ptr);
+
+    //sys.Gdtr.write(gdt_ptr);
 
     rt_loadedGDTSuccess();
 
 
+    main_tss_entry.ss0 = .{ .index = 2, .requested_privilege_level = 0, .table_indicator = .gdt };
+    main_tss_entry.esp0 =  //0xC0000000;
+    @intFromPtr(&stack_top);
+    main_tss_entry.cs = .{ .index = 1, .requested_privilege_level = 3, .table_indicator = .gdt };
+    const ds = sys.SegmentSelector{ .index = 2, .requested_privilege_level = 3, .table_indicator = .gdt };
+    main_tss_entry.ss = ds;
+    main_tss_entry.ds = ds;
+    main_tss_entry.es = ds;
+    main_tss_entry.fs = ds;
+    main_tss_entry.gs = ds;
 
+    //main_tss_entry.
+
+//const d: u16 = @bitCast(main_tss_entry.cs);
+//vga.print("test: 0x{x}\n", .{d});
+//sys.spinloop();
     // Load the TSS
     ltr(TSS_OFFSET);
 
@@ -444,17 +467,24 @@ pub fn init() void {
 /// Arguments:
 ///     IN gdt_ptr: *gdt.GdtPtr - The address to the GDT.
 ///
-pub fn lgdt(ptr: *const GdtPtr) void {
+pub fn lgdt(ptr: sys.PseudoDescriptor) void {
     // Load the GDT into the CPU
-    asm volatile ("lgdt (%%eax)"
+    asm volatile (
+        \\lgdt (%%eax)
         :
-        : [ptr] "{eax}" (ptr),
+        : [ptr] "{eax}" (&ptr),
     );
 
     // Load the kernel data segment, index into the GDT
+    const selector = sys.SegmentSelector{
+        .index = KERNEL_DATA_INDEX,
+        .requested_privilege_level = 0,
+        .table_indicator = .gdt
+    };
+
     asm volatile ("mov %%bx, %%ds"
         :
-        : [KERNEL_DATA_OFFSET] "{bx}" (KERNEL_DATA_OFFSET),
+        : [KERNEL_DATA_OFFSET] "{bx}" (selector),
     );
 
     asm volatile ("mov %%bx, %%es");
@@ -462,10 +492,21 @@ pub fn lgdt(ptr: *const GdtPtr) void {
     asm volatile ("mov %%bx, %%gs");
     asm volatile ("mov %%bx, %%ss");
 
+    //const code_selector = sys.SegmentSelector{
+    //    .index = KERNEL_CODE_INDEX,
+    //    .requested_privilege_level = 0,
+    //    .table_indicator = .gdt
+    //};
+
+
     // Load the kernel code segment into the CS register
+    //sys.setCodeSegment(code_selector);
     asm volatile (
-        \\ljmp $0x08, $1f
+        \\ pushw $8
+        \\ pushl $1f
+        \\ljmp *(%%esp)
         \\1:
+        \\add $6, %%esp
     );
 }
 
@@ -510,5 +551,5 @@ pub fn sgdt() GdtPtr {
     asm volatile ("sgdt %[tab]"
         : [tab] "=m" (ptr),
     );
-    return gdt_ptr;
+    return ptr;
 }

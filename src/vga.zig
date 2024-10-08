@@ -51,7 +51,7 @@ pub const ConsoleColor = enum(u8) {
     white = 15,
 };
 
-const VgaCell = packed struct(u16) {
+pub const VgaCell = packed struct(u16) {
     char: u8,
     attribute: u8,
 
@@ -60,7 +60,7 @@ const VgaCell = packed struct(u16) {
     }
 };
 
-var vga_buffer: [25][]volatile VgaCell = init: {
+pub var vga_buffer: [25][]volatile VgaCell = init: {
     var video_mem = @as([*]volatile VgaCell, @ptrFromInt(0xb8000 + 0xC0000000));
     var buf: [25][]volatile VgaCell = undefined;
     for (0..25) |i| {
@@ -71,25 +71,33 @@ var vga_buffer: [25][]volatile VgaCell = init: {
     break :init buf;
 };
 
+pub fn init(page: []u8) void {
+    var video_mem = @as([*]volatile VgaCell, @ptrCast(@alignCast(page.ptr)));
+    for (0..25) |i| {
+        vga_buffer[i].len = 80;
+        vga_buffer[i].ptr = video_mem;
+        video_mem += 80;
+    }
+}
+
 const Pos = struct { x: u8, y: u8 };
 
 pub fn printChar(char: u8, pos: Pos) void {
-    vga_buffer[pos.y][pos.x] = VgaCell.init(char, .white, .black);
+    vga_buffer[pos.y][pos.x] = VgaCell.init(char, .green, .black);
 }
 
 pub fn clearScreen(color: ConsoleColor) void {
-    for (vga_buffer) |row| {
-        for (row) |*col| {
+    for (&vga_buffer) |*row| {
+        for (row.*) |*col| {
             col.* = VgaCell.init(' ', .white, color);
         }
     }
-
     setCursor(.{.x =0, .y = 0});
 }
 
 pub fn scrollUp(bg: ConsoleColor) void {
     for(vga_buffer[0..vga_buffer.len-1], 1..) |row, i| {
-        @memcpy(row, vga_buffer[i]);
+        @memcpy(row.ptr, vga_buffer[i]);
     }
     for (vga_buffer[vga_buffer.len-1]) |*col| {
         col.* = VgaCell.init(' ', .white, bg);

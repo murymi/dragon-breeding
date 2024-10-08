@@ -27,7 +27,7 @@ pub export fn vulga() void {
     vga.print("Vulga language\n", .{});
 }
 
-pub var interrupt_descriptor_table: [256]IDTGate = undefined;
+pub var interrupt_descriptor_table: [256]sys.IDTEntry = undefined;
 
 ///
 /// Send data to the master PIC. This will send it to the master data port.
@@ -57,9 +57,27 @@ pub fn ioWait() void {
 }
 
 pub fn initIdt() void {
-    inline for (0..32) |i| {
-        const stub = getInterruptStub(i);
-        interrupt_descriptor_table[i] = IDTGate.init(@intFromPtr(&stub), 0x8e, 0x08);
+    //inline for (0..32) |i| {
+    //    const stub = getInterruptStub(i);
+    //interrupt_descriptor_table[i] = IDTGate.init(@intFromPtr(&stub), 0x8e, 0x08);
+    //}
+
+    const selector = sys.SegmentSelector{ .index = 1, .requested_privilege_level = 0, .table_indicator = .gdt };
+    inline for (sys.exceptions, 0..) |e, i| {
+        const proc = sys.interruptProcedure(e, "handler");
+
+        const gate: sys.IDTEntry = switch (e.kind) {
+            .fault => .{ .interrupt = sys.InterruptGate.init(&proc, selector, 0, .@"32", true) },
+            .trap => .{ .trap = sys.TrapGate.init(&proc, selector, 0, .@"32", true) },
+            .interrupt => .{ .interrupt = sys.InterruptGate.init(&proc, selector, 0, .@"32", true) },
+            .fault_trap => .{ .interrupt = sys.InterruptGate.init(&proc, selector, 0, .@"32", true) },
+            .abort => .{ .interrupt = sys.InterruptGate.init(&proc, selector, 0, .@"32", true) },
+            else => .{ .interrupt = sys.InterruptGate.init(&proc, selector, 0, .@"32", true) },
+        };
+
+        interrupt_descriptor_table[i] = gate;
+        //_ = gate;
+        //const entry = sys.
     }
 
     //    // icw1
@@ -84,9 +102,14 @@ pub fn initIdt() void {
 
     remap();
 
-    inline for (32..48) |i| {
-        const stub = getInterruptStub(i);
-        interrupt_descriptor_table[i] = IDTGate.init(@intFromPtr(&stub), 0x8e, 0x08);
+    inline for (32..256) |i| {
+        //const stub = getInterruptStub(i);
+        const proc = sys.interruptProcedure(.{ .id = i }, "handler");
+        const pric = if(i == 0x80) 3 else 0;
+        const gate = sys.IDTEntry{ .interrupt = sys.InterruptGate.init(&proc, selector, pric, .@"32", true) };
+
+        interrupt_descriptor_table[i] = gate;
+        //IDTGate.init(@intFromPtr(&s), 0x8e, 0x08);
     }
 
     loadIdt(&idt);
@@ -130,7 +153,7 @@ pub fn enable() void {
     asm volatile ("sti");
 }
 
-const IDT = packed struct { limit: u16, base: [*]IDTGate };
+const IDT = packed struct { limit: u16, base: [*]sys.IDTEntry };
 
 var idt: IDT = undefined;
 
@@ -150,11 +173,10 @@ var idt: IDT = undefined;
 ///     IN ctx: *arch.CpuState - Pointer to the exception context containing the contents
 ///                              of the registers at the time of a exception.
 ///
-export fn handler(ctx: *CpuState) usize {
-    //vga.print("==============oya===================\n", .{});
-    //vga.print("{any}\n", .{ctx.*});
+const sys = @import("sys/registers.zig");
 
-    if (ctx.int_num < 32 //or ctx.int_num == syscalls.INTERRUPT
+export fn handler(ctx: *sys.cpuContext(.{})) usize {
+    if (ctx.interrupt_number < 32 //or ctx.int_num == syscalls.INTERRUPT
     ) {
         return isrHandler(ctx);
     } else {
@@ -168,6 +190,7 @@ export fn handler(ctx: *CpuState) usize {
 export fn commonStub() callconv(.Naked) void {
     asm volatile (
         \\pusha
+        //\\push  %%ss
         \\push  %%ds
         \\push  %%es
         \\push  %%fs
@@ -179,6 +202,7 @@ export fn commonStub() callconv(.Naked) void {
         \\mov   %%ax, %%es
         \\mov   %%ax, %%fs
         \\mov   %%ax, %%gs
+        //\\mov   %%ax, %%ss
         \\mov   %%esp, %%eax
         \\push  %%eax
         \\call  handler
@@ -198,15 +222,16 @@ export fn commonStub() callconv(.Naked) void {
         \\pop   %%fs
         \\pop   %%es
         \\pop   %%ds
+        //\\pop %%ss
         \\popa
     );
     // The Tss.esp0 value is the stack pointer used when an interrupt occurs. This should be the current process' stack pointer
     // So skip the rest of the CpuState, set Tss.esp0 then un-skip the last few fields of the CpuState
     asm volatile (
-        \\add   $0x1C, %%esp
-        \\.extern gdt.main_tss_entry
-        \\mov   %%esp, (gdt.main_tss_entry + 4)
-        \\sub   $0x14, %%esp
+    //\\add   $0x1C, %%esp
+    //\\.extern gdt.main_tss_entry
+    //\\mov   %%esp, (gdt.main_tss_entry + 4)
+        \\add   $0x8, %%esp
         \\iret
     );
 }
@@ -226,9 +251,9 @@ pub const InterruptHandler = fn () callconv(.Naked) void;
 pub fn getInterruptStub(comptime interrupt_num: u32) InterruptHandler {
     return struct {
         fn func() callconv(.Naked) void {
-            asm volatile (
-                \\ cli
-            );
+            //asm volatile (
+            //    \\ cli
+            //);
 
             // These interrupts don't push an error code onto the stack, so will push a zero.
             if (interrupt_num != 8 and !(interrupt_num >= 10 and interrupt_num <= 14) and interrupt_num != 17) {
@@ -307,43 +332,67 @@ pub const CpuState = packed struct {
     }
 };
 
-export fn irqHandler(ctx: *CpuState) usize {
-        //vga.print("==========================\n", .{});
+const main = @import("main.zig");
+
+export fn irqHandler(ctx: *sys.cpuContext(.{})) usize {
+    //vga.print("==========================\n", .{});
     // Get the IRQ index, by getting the interrupt number and subtracting the offset.
-    if (ctx.int_num < 32) {
-        vga.print("Not an IRQ number: {}\n", .{ctx.int_num});
+    //var res
+    const ret_esp = @intFromPtr(ctx);
+    if (ctx.interrupt_number < 32) {
+        vga.print("Not an IRQ number: {}\n", .{ctx.interrupt_number});
     }
-    const irq_offset = ctx.int_num - 32;
+    const irq_offset = ctx.interrupt_number - 32;
 
     if (!spuriousIrq(@truncate(irq_offset))) {
-        if (ctx.int_num == 33) {
+        if (ctx.interrupt_number == 33) {
             //keyboardHandle();
             onKeyEvent();
+        }
+
+        if (ctx.interrupt_number == 32) {
+            //vga.print("[[[[ ]]]]\n", .{});
+            //ret_esp = main.handleClock(ctx);
+        }
+
+        if(ctx.interrupt_number == 0x80) {
+            vga.print("SYSCALLL....: {}\n", .{ctx.edi});
+            ctx.eax = 90;
         }
         //ret_esp = handler(ctx);
         // Send the end of interrupt command
         sendEndOfInterrupt(@truncate(irq_offset));
-    } else { 
-    }
+    } else {}
 
     //sendEndOfInterrupt(@truncate(ctx.int_num));
 
     //vga.print("SENT EOF\n", .{});
 
-    const ret_esp = @intFromPtr(ctx);
     return ret_esp;
 }
 
-const paging = @import("paging.zig");
+//const paging = @import("paging.zig");
 
-
-export fn isrHandler(ctx: *CpuState) usize {
+export fn isrHandler(ctx: *sys.cpuContext(.{})) usize {
     // Get the interrupt number
     //const isr_num = ctx.int_num;
 
-    if(ctx.int_num == 14) {
-        _ = paging.pageFault(ctx);
+    if (ctx.interrupt_number == 14) {
+        //_ = paging.pageFault(ctx);
         //while (true) {}
+        const code:sys.PageFaultErrorCode = @bitCast(ctx.error_code);
+        //sys.Cr1{}
+        vga.print("Page Fault occurred: 0x{x}\n{}\n", .{sys.Cr2.read().value, code});
+        while (true) {
+            sys.haltProcessor();
+        }
+    } else {
+        const code:sys.ErrorCode = @bitCast(ctx.error_code);
+
+        vga.print("Other: 0x{x}, no: {}\n", .{code.index, ctx.interrupt_number});
+        while (true) {
+            sys.haltProcessor();
+        }
     }
 
     const ret_esp = @intFromPtr(ctx);
@@ -812,8 +861,6 @@ pub fn sendEndOfInterrupt(irq_num: u8) void {
     sendCommandMaster(OCW2_END_OF_INTERRUPT);
 }
 
-
-
 pub const KeyPosition = enum(u7) {
     ESC,
     F1,
@@ -930,8 +977,6 @@ pub const KeyAction = struct {
     released: bool,
 };
 
-
-
 /// The initialised keyboard
 //var keyboard: *Keyboard = undefined;
 /// The number of keys pressed without a corresponding release
@@ -984,7 +1029,7 @@ fn parseScanCode(scan_code: u8) ?KeyAction {
         }
     }
     // Cut off the top bit, which denotes that the key was released
-    const key_code:u7 = @truncate(scan_code);
+    const key_code: u7 = @truncate(scan_code);
     var key_pos: ?KeyPosition = null;
     if (special_sequence or on_print_screen) {
         if (!released) {
@@ -1065,7 +1110,7 @@ fn parseScanCode(scan_code: u8) ?KeyAction {
             // Releasing a special key means we are no longer on that special key
             special_sequence = false;
         }
-    //vga.print("============================\n", .{});
+        //vga.print("============================\n", .{});
         return KeyAction{ .position = k, .released = released };
     }
     return null;
@@ -1075,7 +1120,8 @@ fn parseScanCode(scan_code: u8) ?KeyAction {
 /// Register a keyboard action. Should only be called in response to a keyboard IRQ
 ///
 /// Arguments:
-///     IN ctx: *arch.CpuState - The state of the CPU when the keyboard action occurred
+///     IN ctx: *arch.CpuState - The state of the C        const proc: u32 = @intFromPtr(proc_entry_point);
+///PU when the keyboard action occurred
 ///
 /// Return: usize
 ///     The stack pointer value to use when returning from the interrupt
